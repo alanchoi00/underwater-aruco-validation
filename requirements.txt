@@ -1,0 +1,6 @@
+numpy
+opencv-contrib-python
+reportlab
+pyyaml
+# ROS 2 (rclpy, sensor_msgs) is required for recorder/run_recorder.py and comes from
+# your ROS 2 installation, not pip.

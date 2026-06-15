@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
+# captured data / bags
+aruco_runs/
+*.mcap
+*.db3
+run_log.csv
