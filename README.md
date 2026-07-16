@@ -9,12 +9,27 @@ This repo is **independent** of the docking pipeline. It runs its own `cv2.aruco
 detection and carries its own marker definitions; it does not import any controller or
 perception package.
 
+## Prerequisites
+
+**Docker**, and nothing else. Every step runs in a container, so no local Python is
+needed or wanted: the detection results depend on the exact OpenCV version, which is why
+`requirements.txt` is pinned and `analysis/tests/test_env.py` asserts the running cv2 is
+that pin rather than merely a recent one.
+
 ```bash
 docker build -t uwaruco-analysis .
 ```
 
-That image runs everything here except the two ROS pieces, which are noted where they
-come up.
+Step 3 additionally needs a **ROS 2 Jazzy image**, which is why Docker is not optional
+even if you have the Python packages locally.
+
+**VS Code with the Dev Containers extension** is optional and only affects editing. If
+you "Reopen in Container", drop the `docker run --rm -v "$PWD":/work uwaruco-analysis`
+prefix from every command below and just run `python ...`. Everything else is identical,
+because the devcontainer builds from the same `Dockerfile`.
+
+`capture/record_bag.sh` is the exception to all of this: it runs on the ROV against a
+live ZED, not on your machine.
 
 ## 1. Make the target
 
@@ -33,12 +48,13 @@ the one the analysis reads.
 
 ## 2. Record a run
 
+On the ROV, which is where `ros2 bag` and the live ZED topics are:
+
 ```bash
 capture/record_bag.sh alan-3        # -> $DATASET_DIR/alan-3
 ```
 
-Runs on the ROV, and needs `ros2 bag` from your ROS 2 install. Before diving, confirm the
-camera and odometry are actually publishing:
+Before diving, confirm the camera and odometry are actually publishing:
 
 ```bash
 ros2 topic hz /zed/zed_node/left/image_rect_color/compressed
@@ -74,14 +90,6 @@ docker run --rm -v "$PWD":/work uwaruco-analysis python -m pytest -q
 ```
 
 See `analysis/README.md` for what each stage does.
-
-## Working on it
-
-Open the repo in the devcontainer ("Reopen in Container"). It builds from the same root
-`Dockerfile`, so the editor resolves against the versions the code actually runs on.
-Without it your host Python is 3.10 with cv2 4.5.4, where `cv2.aruco.ArucoDetector` does
-not exist: the editor marks correct code broken and accepts the 4.6 API the pin exists to
-avoid.
 
 ## On ground truth
 
