@@ -9,11 +9,17 @@ This repo is **independent** of the docking pipeline. It runs its own `cv2.aruco
 detection and carries its own marker definitions; it does not import any controller or
 perception package.
 
+```bash
+docker build -t uwaruco-analysis .
+```
+
+That image runs everything here except the two ROS pieces, which are noted where they
+come up.
+
 ## 1. Make the target
 
 ```bash
-pip install -r requirements.txt
-python3 target/aruco_collage_a4.py
+docker run --rm -v "$PWD":/work uwaruco-analysis python target/aruco_collage_a4.py
 ```
 
 Writes `target/aruco_collage_A4.pdf` and `target/marker_sizes_nominal.yaml`.
@@ -31,36 +37,51 @@ the one the analysis reads.
 capture/record_bag.sh alan-3        # -> $DATASET_DIR/alan-3
 ```
 
-Before diving, confirm the camera and odometry are actually publishing:
+Runs on the ROV, and needs `ros2 bag` from your ROS 2 install. Before diving, confirm the
+camera and odometry are actually publishing:
 
 ```bash
 ros2 topic hz /zed/zed_node/left/image_rect_color/compressed
 ros2 topic hz /zed/zed_node/odom
 ```
 
-Needs `ros2 bag` from your ROS 2 install, not pip.
+## 3. Decode the bags
 
-## 3. Analyse
-
-Two environments, on purpose. See `analysis/README.md`.
+Once per run, in the **ROS 2 container**. This is the only step that needs ROS, and
+`analysis/extract_bags.py` is the only file that imports it; everything downstream reads
+the plain PNG and CSV dataset it writes. That split is what lets this repo pin its own
+OpenCV, since the ROS image ships cv2 4.6 against the 4.10 the detection results depend
+on.
 
 ```bash
-docker build -t uwaruco-analysis .
+zstd -d alan1_0.mcap.zstd                       # rosbag2 cannot read .mcap.zstd directly
+docker run --rm -v /path/to/bags:/bags:ro -v "$PWD":/work <ros-jazzy-image> \
+  bash -lc "source /opt/ros/jazzy/setup.bash && \
+            python3 /work/analysis/extract_bags.py /bags/alan1_0.mcap /work/dataset/test1"
+```
+
+## 4. Analyse
+
+```bash
 docker run --rm -v "$PWD":/work uwaruco-analysis python analysis/run_analysis.py dataset/
 ```
 
-Figures and CSVs land in `results/`, each stamped with the analysis commit so a figure
-in the report traces back to the code that made it. Tests:
+Figures and CSVs land in `results/`, each stamped with the analysis commit so a figure in
+the report traces back to the code that made it. Tests:
 
 ```bash
 docker run --rm -v "$PWD":/work uwaruco-analysis python -m pytest -q
 ```
 
-To work on the analysis, open the repo in the devcontainer ("Reopen in Container"). It
-builds from the same root `Dockerfile`, so the editor resolves against the versions
-the code actually runs on. Without it your host Python is 3.10 with cv2 4.5.4, where
-`cv2.aruco.ArucoDetector` does not exist, and the editor will mark correct code broken
-while accepting the 4.6 API the pin exists to avoid.
+See `analysis/README.md` for what each stage does.
+
+## Working on it
+
+Open the repo in the devcontainer ("Reopen in Container"). It builds from the same root
+`Dockerfile`, so the editor resolves against the versions the code actually runs on.
+Without it your host Python is 3.10 with cv2 4.5.4, where `cv2.aruco.ArucoDetector` does
+not exist: the editor marks correct code broken and accepts the 4.6 API the pin exists to
+avoid.
 
 ## On ground truth
 
