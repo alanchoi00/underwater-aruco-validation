@@ -103,19 +103,6 @@ class FixedK:
                              xtol=1e-12, ftol=1e-12, max_nfev=max_nfev)
 
 
-def init_poses(layout, obs_by_frame, keys, K):
-    """Board-PnP init for every frame, under the given K."""
-    rv0 = np.zeros((len(keys), 3))
-    tv0 = np.zeros((len(keys), 3))
-    tv0[:, 2] = 1.0
-    for i, k in enumerate(keys):
-        try:
-            rv0[i], tv0[i] = board_pnp(layout, obs_by_frame[k], K)
-        except ValueError:
-            pass
-    return rv0, tv0
-
-
 def _pnp_init(problem, layout0, K):
     """Per-frame board-PnP pose init under a candidate K, read off `problem`'s flat arrays.
 

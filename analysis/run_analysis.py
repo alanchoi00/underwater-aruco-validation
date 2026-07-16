@@ -44,7 +44,16 @@ def code_version():
 
 def load_run(dataset_dir, run):
     d = os.path.join(dataset_dir, run)
-    det = pd.read_csv(os.path.join(d, "detections.csv"))
+    det_csv = os.path.join(d, "detections.csv")
+    timing_csv = os.path.join(d, "timing.csv")
+    # Stage 1 on demand: an extracted dataset has frames/imu/camera_info but not yet
+    # detections. Sweep and persist so the pipeline is self-contained and reproducible
+    # from a freshly extracted dataset (no ad-hoc detection step required).
+    if not os.path.exists(det_csv):
+        det_df, timing_df = detect.sweep_dataset(d, detect.make_detector())
+        det_df.to_csv(det_csv, index=False)
+        timing_df.to_csv(timing_csv, index=False)
+    det = pd.read_csv(det_csv)
     frames = pd.read_csv(os.path.join(d, "frames.csv"))
     imu = pd.read_csv(os.path.join(d, "imu.csv"))
     ci = yaml.safe_load(open(os.path.join(d, "camera_info.yaml")))
