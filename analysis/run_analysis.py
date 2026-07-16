@@ -163,27 +163,48 @@ def main(dataset_dir):
          "bin_hi_px": float(row.bin_hi), "n": int(row.n)}
         for row in suppressed.itertuples()
     ]
-    fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 4.0))
-    for grp in sorted(vizstyle.SIZE_COLORS):
+    # All four size groups collapse onto nearly the same sigmoid -- that IS the finding
+    # -- but four overlaid translucent CI bands become an unreadable haze. Facet into a
+    # 2x2 small-multiple grid, one panel per size, so each curve and its CI are legible;
+    # the other three sizes are redrawn as faint grey ghosts in every panel so the
+    # collapse itself stays visible.
+    groups = sorted(vizstyle.SIZE_COLORS)
+    curves = {}
+    for grp in groups:
         sub = rates1[(rates1.group == grp) & (rates1.n >= MIN_TRIALS_PER_BIN)].sort_values("bin_lo")
-        if not len(sub):
-            continue
-        centre = ((sub.bin_lo + sub.bin_hi) / 2).to_numpy()
-        color, marker = vizstyle.SIZE_COLORS[grp], vizstyle.SIZE_MARKERS[grp]
-        ax.plot(centre, sub.rate, marker=marker, color=color, label=f"{grp:.0f} mm")
-        ax.fill_between(centre, sub.ci_lo, sub.ci_hi, color=color, alpha=0.15, linewidth=0)
-        ax.annotate(f"{grp:.0f} mm", (centre[-1], sub.rate.to_numpy()[-1]),
-                    xytext=(5, 0), textcoords="offset points",
-                    fontsize=7, color=color, va="center")
-    ax.axvline(M.pixel_budget_px(5), ls="--", c=vizstyle.TEXT_SECONDARY, lw=1,
-               label=f"3(n+2) budget = {M.pixel_budget_px(5)} px")
-    ax.set_xscale("log")
-    ax.set_xlabel("apparent marker size (px)")
-    ax.set_ylabel("detection rate")
-    ax.set_ylim(-0.05, 1.05)
-    ax.legend(loc="lower right")
-    ax.set_title("Detection rate vs apparent marker size")
-    fig.tight_layout()
+        if len(sub):
+            curves[grp] = sub
+
+    budget_px = M.pixel_budget_px(5)
+    fig, axes = plt.subplots(2, 2, figsize=(vizstyle.WIDE_W, 4.6), sharex=True, sharey=True)
+    for ax, grp in zip(axes.flat, groups):
+        for other in groups:
+            if other == grp or other not in curves:
+                continue
+            osub = curves[other]
+            ocentre = ((osub.bin_lo + osub.bin_hi) / 2).to_numpy()
+            ax.plot(ocentre, osub.rate, color=vizstyle.GHOST_COLOR, lw=1, zorder=1)
+        if grp in curves:
+            sub = curves[grp]
+            centre = ((sub.bin_lo + sub.bin_hi) / 2).to_numpy()
+            color, marker = vizstyle.SIZE_COLORS[grp], vizstyle.SIZE_MARKERS[grp]
+            ax.fill_between(centre, sub.ci_lo, sub.ci_hi, color=color, alpha=0.2,
+                             linewidth=0, zorder=2)
+            ax.plot(centre, sub.rate, marker=marker, color=color, zorder=3)
+        ax.axvline(budget_px, ls="--", c=vizstyle.TEXT_SECONDARY, lw=1, zorder=2)
+        vizstyle.log_px_ticks(ax)
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_title(f"{grp:.0f} mm")
+
+    ghost_handle = plt.Line2D([], [], color=vizstyle.GHOST_COLOR, lw=1, label="other sizes")
+    budget_handle = plt.Line2D([], [], ls="--", c=vizstyle.TEXT_SECONDARY, lw=1,
+                               label=f"3(n+2) budget = {budget_px} px")
+    fig.supxlabel("apparent marker size (px)", y=0.10)
+    fig.supylabel("detection rate")
+    fig.suptitle("Detection rate vs apparent marker size")
+    fig.legend(handles=[ghost_handle, budget_handle], loc="lower center",
+               ncol=2, bbox_to_anchor=(0.5, 0.0), frameon=False)
+    fig.tight_layout(rect=(0.02, 0.14, 1, 0.94))
     vizstyle.save(fig, "detection_rate_vs_px")
 
     # Figure 2: the hypothesis test.
@@ -228,7 +249,8 @@ def main(dataset_dir):
         rng_axis = [M.range_from_apparent_px(c, size_to_mid[grp], ci1["fx"]) for c in centre]
         color, marker = vizstyle.SIZE_COLORS[grp], vizstyle.SIZE_MARKERS[grp]
         ax.plot(rng_axis, sub.rate, marker=marker, color=color, label=f"{grp:.0f} mm")
-        ax.fill_between(rng_axis, sub.ci_lo, sub.ci_hi, color=color, alpha=0.15, linewidth=0)
+        ax.fill_between(rng_axis, sub.ci_lo, sub.ci_hi, color=color, alpha=0.12, linewidth=0)
+    vizstyle.linear_range_ticks(ax, step=0.5, max_val=5.0)
     ax.set_xlabel("range (m, derived: +/-10%)")
     ax.set_ylabel("detection rate")
     ax.set_ylim(-0.05, 1.05)

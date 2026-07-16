@@ -11,6 +11,10 @@ Distinct marker shapes are a deliberate SECONDARY encoding so identity survives 
 """
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.ticker import NullFormatter
+
+GHOST_COLOR = "#c9c8c4"
 
 # Sequential blue ramp, light -> dark = small -> large marker.
 SIZE_COLORS = {35.6: "#6da7ec", 44.4: "#2a78d6", 74.7: "#184f95", 149.4: "#0d366b"}
@@ -57,6 +61,28 @@ def apply():
 # Single-column and double-column widths for a typical LaTeX thesis (inches).
 COL_W = 3.4
 WIDE_W = 5.6
+
+
+def log_px_ticks(ax):
+    """Explicit, plainly-labelled ticks on a log-scaled apparent-px axis.
+
+    The default log formatter only shows decade labels (10^1, 10^2), which cannot
+    answer "is that 21 px or 40 px?". Replace with an explicit tick set and disable
+    minor ticks so no stray unlabelled/scientific ticks slip back in.
+    """
+    ticks = [10, 15, 21, 30, 50, 75, 100, 150, 200]
+    ax.set_xscale("log")
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([str(t) for t in ticks])
+    ax.minorticks_off()
+    ax.xaxis.set_minor_formatter(NullFormatter())
+
+
+def linear_range_ticks(ax, step=0.5, max_val=5.0):
+    """Dense, plainly-labelled ticks on a linear range (m) axis."""
+    ticks = np.arange(0, max_val + step / 2, step)
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([f"{t:g}" for t in ticks])
 
 
 def save(fig, stem, outdir="results"):
