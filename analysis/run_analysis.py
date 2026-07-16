@@ -159,8 +159,8 @@ def main(dataset_dir):
     # table, including these bins, still goes to CSV via rates1/rate_by_bin unchanged).
     suppressed = rates1[(rates1.n > 0) & (rates1.n < MIN_TRIALS_PER_BIN)]
     summary["suppressed_bins"] = [
-        {"group_mm": float(row.group), "bin_lo_px": float(row.bin_lo),
-         "bin_hi_px": float(row.bin_hi), "n": int(row.n)}
+        {"figure": "detection_rate", "group_mm": float(row.group),
+         "bin_lo_px": float(row.bin_lo), "bin_hi_px": float(row.bin_hi), "n": int(row.n)}
         for row in suppressed.itertuples()
     ]
     # All four size groups collapse onto nearly the same sigmoid -- that IS the finding
@@ -274,23 +274,41 @@ def main(dataset_dir):
         perr = perr.assign(size_mm=perr.marker_id.map(
             lambda mid: round(g.SIZES[int(mid)] * 1000, 1)))
         trans_err_summary = {}
+        # Same suppression as figures 1/3: a bin with n < MIN_TRIALS_PER_BIN is a single
+        # (or handful of) sample(s), not a measured trend, and its std is often NaN
+        # (n=1) or wildly unrepresentative -- drop it here too, and log what was dropped.
+        groups_sorted = sorted(perr.size_mm.unique())
+        n_groups = len(groups_sorted)
+        # Small per-series x offset so the four series' error bars don't stack on the
+        # same bin-centre and become an unreadable thicket. Offsets are symmetric around
+        # 0, ordered by marker size (smallest -> most negative).
+        dodge_step = 0.03
+        dodges = {grp: (i - (n_groups - 1) / 2) * dodge_step
+                  for i, grp in enumerate(groups_sorted)}
         for grp, sub in perr.groupby("size_mm"):
             st = M.binned_stats(sub, "trans_err_m", "range_m", RANGE_BINS)
-            valid = (st.n > 0).to_numpy()
-            centre = ((st.bin_lo + st.bin_hi) / 2).to_numpy()
+            dropped = st[(st.n > 0) & (st.n < MIN_TRIALS_PER_BIN)]
+            for row in dropped.itertuples():
+                summary["suppressed_bins"].append({
+                    "figure": "trans_err_vs_range", "group_mm": float(grp),
+                    "bin_lo_m": float(row.bin_lo), "bin_hi_m": float(row.bin_hi),
+                    "n": int(row.n)})
+            valid = ((st.n >= MIN_TRIALS_PER_BIN)).to_numpy()
+            centre = ((st.bin_lo + st.bin_hi) / 2).to_numpy() + dodges[grp]
             color = vizstyle.SIZE_COLORS.get(grp, vizstyle.TEXT_PRIMARY)
             marker = vizstyle.SIZE_MARKERS.get(grp, "o")
             ax.errorbar(centre[valid], st["mean"].to_numpy()[valid] * 1000,
                         yerr=st["std"].to_numpy()[valid] * 1000,
                         marker=marker, color=color, capsize=3, label=f"{grp:.0f} mm")
             trans_err_summary[f"{grp:.0f}mm"] = {
-                f"{lo}-{hi}": (None if np.isnan(mu) else round(mu * 1000, 1))
-                for lo, hi, mu in zip(st.bin_lo, st.bin_hi, st["mean"])}
+                f"{lo}-{hi}": (None if (np.isnan(mu) or n < MIN_TRIALS_PER_BIN)
+                               else round(mu * 1000, 1))
+                for lo, hi, mu, n in zip(st.bin_lo, st.bin_hi, st["mean"], st["n"])}
         summary["trans_err_vs_range_mm"] = trans_err_summary
         M.binned_stats(perr, "trans_err_m", "range_m", RANGE_BINS).to_csv(
             "results/trans_err_vs_range.csv", index=False)
-    ax.set_xlabel("range (m)")
-    ax.set_ylabel("translation vs board reference (mm)")
+    ax.set_xlabel("range (m; series dodged +/-0.03-0.09 m for legibility)")
+    ax.set_ylabel("translation vs board reference (mm, error bars: +/-1 std)")
     ax.legend()
     ax.set_title("Single-marker vs board reference (self-consistency, NOT accuracy)")
     fig.tight_layout()
@@ -398,14 +416,28 @@ def main(dataset_dir):
         "- Angle is reported as two regimes (test1 head-on, test2 oblique ~57 deg), NOT "
         "a swept curve: there is no controlled angle sweep and angle is confounded with "
         "range/size (spec 3.1c).",
-        f"- {len(summary['suppressed_bins'])} bin(s) with fewer than "
+    ]
+    rate_suppressed = [b for b in summary["suppressed_bins"]
+                        if b["figure"] == "detection_rate"]
+    pose_suppressed = [b for b in summary["suppressed_bins"]
+                       if b["figure"] == "trans_err_vs_range"]
+    lines += [
+        f"- {len(rate_suppressed)} bin(s) with fewer than "
         f"{MIN_TRIALS_PER_BIN} trials were suppressed from the detection-rate figures "
         "(their Wilson CI spans most of the axis and would dominate the plot with no "
         "information); the full per-bin table, including these, is still in "
         "`detection_trials_test1.csv` / `detection_trials_test2.csv`. Suppressed: " +
         ("; ".join(f"{b['group_mm']:.0f} mm, {b['bin_lo_px']:.0f}-{b['bin_hi_px']:.0f} px, "
-                   f"n={b['n']}" for b in summary["suppressed_bins"])
-         if summary["suppressed_bins"] else "none") + ".",
+                   f"n={b['n']}" for b in rate_suppressed)
+         if rate_suppressed else "none") + ".",
+        f"- {len(pose_suppressed)} bin(s) with fewer than "
+        f"{MIN_TRIALS_PER_BIN} trials were suppressed from the pose-error-vs-range "
+        "figure (n=1-2 bins were single-sample artifacts, e.g. one giving a std of NaN "
+        "with no error bar); the full per-bin table, including these, is still in "
+        "`trans_err_vs_range.csv`. Suppressed: " +
+        ("; ".join(f"{b['group_mm']:.0f} mm, {b['bin_lo_m']:.1f}-{b['bin_hi_m']:.1f} m, "
+                   f"n={b['n']}" for b in pose_suppressed)
+         if pose_suppressed else "none") + ".",
         "",
     ]
     for run, s in summary["runs"].items():
