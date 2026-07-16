@@ -28,7 +28,7 @@ the one the analysis reads.
 ## 2. Record a run
 
 ```bash
-recorder/record_bag.sh alan-3        # -> $DATASET_DIR/alan-3
+capture/record_bag.sh alan-3        # -> $DATASET_DIR/alan-3
 ```
 
 Before diving, confirm the camera and odometry are actually publishing:
@@ -64,4 +64,4 @@ measured, and ZED odometry was not in the bag. `record_bag.sh` fixes this by rec
 `/zed/zed_node/odom` and `/zed/zed_node/pose`, which give a metric trajectory. Record
 them. Without a metric reference, detection range can only be reported against the ArUco
 pose itself, which is the thing under test, and translation accuracy is not measurable at
-all. See `docs/capture_2026-07-02.md`.
+all. See `capture/2026-07-02.md`.
