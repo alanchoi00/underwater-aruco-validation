@@ -1,0 +1,21 @@
+# Ruff config, so `ruff check .` runs CLEAN on this repo.
+#
+# That is the whole point of having it: a linter that is red on day one gets ignored,
+# and then a real violation arrives and nobody notices it in the noise. Everything below
+# is an exemption with a reason, not a blanket silence. If a new rule fires, it means
+# something.
+
+line-length = 90
+
+[lint]
+# E702/E701 are style, not defects: they object to `a = 1; b = 2` on one line. This repo
+# uses that form deliberately in a few places where the statements are one thought (a
+# paired assignment, a two-line test fixture). Ruff's default line-length pressure is
+# what pushes toward it in the first place.
+ignore = ["E701", "E702"]
+
+[lint.per-file-ignores]
+# The collage is written in a dense semicolon style from top to bottom. It works, it is
+# verified against the printed board, and reformatting it would churn every line of a
+# file nobody needs to read line by line. E401/E741 there are the same story.
+"target/aruco_collage_a4.py" = ["E401", "E741"]

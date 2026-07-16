@@ -549,7 +549,7 @@ def main(dataset_dir):
         f"- OpenCV: `{summary['opencv']}`",
         f"- Fitted law: `max_range ~ {k:.1f} x side_length`",
         f"- Host CPU (latency context): `{summary['host_cpu']}`",
-        f"- Intrinsics: ZED shipped K, no refraction correction (see spec 3.2)",
+        "- Intrinsics: ZED shipped K, no refraction correction (see spec 3.2)",
         "- Metric range carries ~+/-10% from focal-length uncertainty.",
         "- Pose error is **vs the board reference**, not vs ground truth. None exists.",
         "- Latency is detectMarkers on the analysis host, not on ROV compute.",

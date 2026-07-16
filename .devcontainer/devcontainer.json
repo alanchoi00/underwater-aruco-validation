@@ -24,22 +24,62 @@
   "workspaceFolder": "/work",
   "workspaceMount": "source=${localWorkspaceFolder},target=/work,type=bind",
 
-  // reportlab belongs to the collage, not the analysis. Installing it here rather than
-  // in the Dockerfile keeps it out of the artifact that certifies the detector version,
-  // while still letting you regenerate the print target without a manual pip install.
-  "postCreateCommand": "pip install --no-cache-dir -r target/requirements.txt",
+  // reportlab belongs to the collage, not the analysis, and ruff is an editor tool.
+  // Installing them here rather than in the Dockerfile keeps both out of the artifact
+  // that certifies the detector version, while still letting you regenerate the print
+  // target and lint without a manual pip install.
+  "postCreateCommand": "pip install --no-cache-dir -r target/requirements.txt ruff",
 
   "customizations": {
     "vscode": {
+      // Scoped to what this repo actually contains: 22 .py, 3 .yaml, 3 .md, 1 .sh,
+      // 1 Dockerfile, 1 devcontainer.json. The docking repo's ROS, C++, URDF, CMake
+      // and LaTeX extensions are all deliberately absent, because none of those exist
+      // here and this container is deliberately ROS-free.
       "extensions": [
+        // Python: the reason this devcontainer exists.
         "ms-python.python",
-        "ms-python.vscode-pylance"
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "charliermarsh.ruff",
+        "njpwerner.autodocstring",
+
+        // capture/record_bag.sh. Worth having: shellcheck is not on the host, so that
+        // script has only ever been checked with `bash -n`, which catches syntax and
+        // nothing else.
+        "timonwong.shellcheck",
+        "foxundermoon.shell-format",
+
+        // target/*.yaml carry the marker sizes and the recovered board layout; a typo
+        // in those silently changes every derived range.
+        "redhat.vscode-yaml",
+
+        // analysis/Dockerfile and this file.
+        "ms-azuretools.vscode-docker",
+
+        // Docs and general.
+        "yzhang.markdown-all-in-one",
+        "eamodio.gitlens"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/usr/local/bin/python",
+
+        // The image sets PYTHONPATH=/work, but Pylance does not read it. State it, or
+        // `from analysis import geometry` resolves at runtime and not in the editor.
+        "python.analysis.extraPaths": ["/work"],
+        "python.analysis.typeCheckingMode": "basic",
+
         "python.testing.pytestEnabled": true,
+        "python.testing.unittestEnabled": false,
         "python.testing.pytestArgs": ["analysis/tests"],
-        "python.terminal.activateEnvironment": false
+        "python.terminal.activateEnvironment": false,
+
+        // ruff.toml is configured so `ruff check .` passes clean; see its header.
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.codeActionsOnSave": { "source.organizeImports.ruff": "explicit" }
+        },
+        "editor.rulers": [90]
       }
     }
   }

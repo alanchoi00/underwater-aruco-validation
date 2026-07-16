@@ -54,7 +54,7 @@ def rodrigues(rv):
     K[:, 0, 1], K[:, 0, 2] = -k[:, 2], k[:, 1]
     K[:, 1, 0], K[:, 1, 2] = k[:, 2], -k[:, 0]
     K[:, 2, 0], K[:, 2, 1] = -k[:, 1], k[:, 0]
-    I = np.eye(3)[None].repeat(len(rv), 0)
+    I = np.eye(3)[None].repeat(len(rv), 0)  # noqa: E741 (identity, per R = I + sK + (1-c)K^2)
     s, c = np.sin(th)[:, :, None], np.cos(th)[:, :, None]
     return I + s * K + (1 - c) * (K @ K)
 
@@ -67,11 +67,11 @@ def board_pts(layout, mrk):
     returns (M,4,3) with z identically 0 (coplanar by construction).
     """
     mrk = np.asarray(mrk)
-    l = LOC[mrk]
+    loc = LOC[mrk]
     th = layout[mrk, 2]
     c, s = np.cos(th), np.sin(th)
-    x = c[:, None] * l[:, :, 0] - s[:, None] * l[:, :, 1] + layout[mrk, 0][:, None]
-    y = s[:, None] * l[:, :, 0] + c[:, None] * l[:, :, 1] + layout[mrk, 1][:, None]
+    x = c[:, None] * loc[:, :, 0] - s[:, None] * loc[:, :, 1] + layout[mrk, 0][:, None]
+    y = s[:, None] * loc[:, :, 0] + c[:, None] * loc[:, :, 1] + layout[mrk, 1][:, None]
     return np.stack([x, y, np.zeros_like(x)], -1)
 
 
