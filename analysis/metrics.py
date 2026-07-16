@@ -144,3 +144,76 @@ def pose_error_vs_reference(obs_by_frame, layout, K):
                          "trans_err_m": trans_err, "rot_err_deg": float(ang)})
     return pd.DataFrame(rows, columns=[
         "frame_idx", "marker_id", "range_m", "trans_err_m", "rot_err_deg"])
+
+
+def detection_trials(obs_by_frame, layout, K, width, height):
+    """Per-frame, per-marker TRIALS -- hits AND misses -- keyed on predicted apparent size.
+
+    A detection rate needs the misses, but a detection table only records hits. The misses
+    are recoverable: where other markers are detected the board pose is known, so a marker's
+    apparent size can be PREDICTED whether or not it was detected.
+
+    Leave-one-out: the pose for marker m is solved from the OTHER detected markers only, so
+    m's own detection never informs the prediction of m's size (which would be circular).
+
+    A trial only counts if the marker is FULLY inside the image. Centre-only would count a
+    marker whose corners spill outside -- legitimately unseeable -- as a miss.
+    """
+    from analysis import layout as L        # local import avoids a circular import
+
+    rows = []
+    for (_run, fi), dets in obs_by_frame.items():
+        board = {m: q for m, q in dets.items() if m in g.SIZES}
+        if not board:
+            continue
+        for mid in g.IDS:
+            others = {m: q for m, q in board.items() if m != mid}
+            if not others:
+                continue                    # nobody else to fix the pose
+            try:
+                rv, tv = L.board_pnp(layout, others, K)
+            except ValueError:
+                continue
+            Xb = g.board_pts(layout, np.array([g.IDX[mid]]))
+            px = g.project(Xb, rv[None], tv[None], np.zeros(1, dtype=int),
+                           K[0, 0], K[1, 1], K[0, 2], K[1, 2])[0]
+            if not (px[:, 0].min() >= 0 and px[:, 0].max() < width
+                    and px[:, 1].min() >= 0 and px[:, 1].max() < height):
+                continue                    # not fully visible -> not a fair trial
+            side = float(np.mean([np.linalg.norm(px[i] - px[(i + 1) % 4])
+                                  for i in range(4)]))
+            rows.append({"frame_idx": int(fi), "marker_id": int(mid),
+                         "size_mm": round(g.SIZES[mid] * 1000, 1),
+                         "pred_px": side, "detected": int(mid in board)})
+    return pd.DataFrame(rows, columns=["frame_idx", "marker_id", "size_mm",
+                                       "pred_px", "detected"])
+
+
+def _wilson(k, n, z=1.96):
+    """Wilson score interval -- behaves at rate 0 and 1, where normal approx does not."""
+    if n == 0:
+        return (float("nan"), float("nan"))
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return (max(0.0, c - h), min(1.0, c + h))
+
+
+def rate_by_bin(trials, bins, group_col="size_mm"):
+    """TRUE detection rate per bin of predicted apparent size, pooled by group.
+
+    Pooling same-size markers multiplies the samples per bin (302-305 are all 44.4 mm ->
+    4x). Returns a Wilson confidence interval, which stays sane at rate 0 and 1.
+    """
+    rows = []
+    for grp, sub in trials.groupby(group_col):
+        for lo, hi in zip(bins[:-1], bins[1:]):
+            b = sub[(sub.pred_px >= lo) & (sub.pred_px < hi)]
+            n, k = int(len(b)), int(b.detected.sum())
+            lo_ci, hi_ci = _wilson(k, n)
+            rows.append({"group": grp, "bin_lo": lo, "bin_hi": hi, "n": n,
+                         "n_detected": k,
+                         "rate": (k / n) if n else float("nan"),
+                         "ci_lo": lo_ci, "ci_hi": hi_ci})
+    return pd.DataFrame(rows)

@@ -16,9 +16,10 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from analysis import detect, geometry as g, imucheck as ic, layout as L, metrics as M, segment
+from analysis import detect, geometry as g, imucheck as ic, layout as L, metrics as M
+from analysis import segment, vizstyle
 
-PX_BINS = [10, 15, 21, 30, 45, 70, 110, 180, 300]
+PX_BINS = [8, 12, 16, 21, 28, 38, 52, 72, 100, 140, 200, 300]
 
 
 def code_version():
@@ -61,9 +62,12 @@ def load_run(dataset_dir, run):
 
 
 def main(dataset_dir):
+    vizstyle.apply()
     os.makedirs("results", exist_ok=True)
     summary = {"opencv": cv2.__version__, "host_cpu": detect.host_cpu(),
                "code_version": code_version(), "runs": {}}
+    lay = L.load_layout("config/board_layout.yaml")
+    trials_by_run = {}
 
     for run in ("test1", "test2"):
         det, frames, imu, ci = load_run(dataset_dir, run)
@@ -115,48 +119,107 @@ def main(dataset_dir):
             "n_oblique_gt_40deg": int((inc > 40).sum()),
         }
 
-    # Figure 1: the calibration-free headline.
+        # Detection TRIALS (hits and misses), corrected metric for figures 1 and 3. A
+        # detection table alone has only hits; where other board markers are detected in
+        # a frame the board pose is known, so a marker's apparent size -- and therefore
+        # whether it SHOULD have been detected -- can be predicted leave-one-out.
+        obs_run = {}
+        for r in det[det.marker_id.isin(g.SIZES)].itertuples():
+            obs_run.setdefault((run, r.frame_idx), {})[int(r.marker_id)] = np.array(
+                [[r.c0x, r.c0y], [r.c1x, r.c1y], [r.c2x, r.c2y], [r.c3x, r.c3y]])
+        trials = M.detection_trials(obs_run, lay, Kmat, ci["width"], ci["height"])
+        trials.to_csv(f"results/detection_trials_{run}.csv", index=False)
+        summary["runs"][run]["n_trials"] = int(len(trials))
+        summary["runs"][run]["n_misses"] = (
+            int((1 - trials.detected).sum()) if len(trials) else 0)
+        trials_by_run[run] = trials
+
+    # size_mm -> a representative marker id, used only to convert a group's bin centre
+    # to range via the pinhole relation (fx * size / apparent_px).
+    size_to_mid = {}
+    for mid in g.IDS:
+        size_to_mid.setdefault(round(g.SIZES[mid] * 1000, 1), mid)
+
+    # Figure 1: the corrected calibration-free headline. A RATE needs the misses, which
+    # detection_trials recovers by prediction; pooled by size group (302-305 etc share a
+    # size -> 4x samples per bin) with a Wilson CI band.
     det1, frames1, _, ci1 = load_run(dataset_dir, "test1")
-    rates1 = M.detection_rate_by_px_bin(det1, {m: len(frames1) for m in g.SIZES}, PX_BINS)
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    for mid, sub in rates1.groupby("marker_id"):
-        centre = (sub.px_lo + sub.px_hi) / 2
-        ax.plot(centre, sub.rate, marker="o", label=f"{mid} ({g.SIZES[mid]*1000:.0f} mm)")
-    ax.axvline(M.pixel_budget_px(5), ls="--", c="k", lw=1,
+    trials1 = trials_by_run["test1"]
+    rates1 = M.rate_by_bin(trials1, PX_BINS)
+    fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 4.0))
+    for grp in sorted(vizstyle.SIZE_COLORS):
+        sub = rates1[(rates1.group == grp) & (rates1.n > 0)].sort_values("bin_lo")
+        if not len(sub):
+            continue
+        centre = ((sub.bin_lo + sub.bin_hi) / 2).to_numpy()
+        color, marker = vizstyle.SIZE_COLORS[grp], vizstyle.SIZE_MARKERS[grp]
+        ax.plot(centre, sub.rate, marker=marker, color=color, label=f"{grp:.0f} mm")
+        ax.fill_between(centre, sub.ci_lo, sub.ci_hi, color=color, alpha=0.15, linewidth=0)
+        ax.annotate(f"{grp:.0f} mm", (centre[-1], sub.rate.to_numpy()[-1]),
+                    xytext=(5, 0), textcoords="offset points",
+                    fontsize=7, color=color, va="center")
+    ax.axvline(M.pixel_budget_px(5), ls="--", c=vizstyle.TEXT_SECONDARY, lw=1,
                label=f"3(n+2) budget = {M.pixel_budget_px(5)} px")
-    ax.set_xscale("log"); ax.set_xlabel("apparent marker size (px)")
-    ax.set_ylabel("detection rate"); ax.legend(fontsize=7); ax.grid(alpha=0.3)
-    ax.set_title("Detection rate vs apparent size (calibration-free)")
-    fig.tight_layout(); fig.savefig("results/detection_rate_vs_px.png", dpi=150)
+    ax.set_xscale("log")
+    ax.set_xlabel("apparent marker size (px)")
+    ax.set_ylabel("detection rate")
+    ax.set_ylim(-0.05, 1.05)
+    ax.legend(loc="lower right")
+    ax.set_title("Detection probability vs apparent marker size")
+    fig.tight_layout()
+    vizstyle.save(fig, "detection_rate_vs_px")
 
     # Figure 2: the hypothesis test.
     mr = summary["runs"]["test1"]["max_range_m"]
     sizes = np.array([g.SIZES[m] for m in sorted(mr)])
     rmax = np.array([mr[m] for m in sorted(mr)])
     k = float(np.sum(sizes * rmax) / np.sum(sizes ** 2))   # least squares through 0
-    fig, ax = plt.subplots(figsize=(6, 4.5))
-    ax.scatter(sizes * 1000, rmax)
+    fig, ax = plt.subplots(figsize=(vizstyle.COL_W, 3.6))
+    # Same-size markers land at nearly identical (x, y): stagger the offset per point
+    # within a size group so IDs stay legible instead of piling on top of each other.
+    OFFSETS = [(4, 4), (4, -11), (12, 4), (12, -11)]
+    by_size = {}
+    for mid in sorted(mr):
+        by_size.setdefault(round(g.SIZES[mid] * 1000, 1), []).append(mid)
+    for size_mm, mids in by_size.items():
+        color = vizstyle.SIZE_COLORS.get(size_mm, vizstyle.TEXT_PRIMARY)
+        marker = vizstyle.SIZE_MARKERS.get(size_mm, "o")
+        for i, mid in enumerate(sorted(mids, key=lambda m: mr[m])):
+            ax.scatter(size_mm, mr[mid], color=color, marker=marker, zorder=3)
+            ax.annotate(str(mid), (size_mm, mr[mid]),
+                        xytext=OFFSETS[i % len(OFFSETS)], textcoords="offset points",
+                        fontsize=7, color=vizstyle.TEXT_SECONDARY)
     xs = np.linspace(0, sizes.max() * 1100, 50)
-    ax.plot(xs, k * xs / 1000, ls="--", c="k", lw=1, label=f"max_range ~ {k:.0f} x side")
+    ax.plot(xs, k * xs / 1000, ls="--", c=vizstyle.TEXT_SECONDARY, lw=1,
+            label=f"max_range ~ {k:.0f} x side")
     ax.axhline(5.0, color="tab:red", lw=1, label="coarse phase needs ~5 m")
-    ax.set_xlabel("marker side (mm)"); ax.set_ylabel("max detection range (m)")
-    ax.legend(); ax.grid(alpha=0.3); ax.set_title("Max detection range vs marker size")
-    fig.tight_layout(); fig.savefig("results/max_range_vs_size.png", dpi=150)
+    ax.set_xlabel("marker side (mm)")
+    ax.set_ylabel("max detection range (m)")
+    ax.legend()
+    ax.set_title("Max detection range vs marker size")
+    fig.tight_layout()
+    vizstyle.save(fig, "max_range_vs_size")
     summary["range_per_side_fit"] = k
 
-    # Figure 3: issue #2's "detection rate vs range". Derived from px via the pinhole
-    # relation, so it inherits the focal length's ~+/-10%. The px figure above is the
-    # calibration-free one; this exists because the issue asks for it.
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    for mid, sub in rates1.groupby("marker_id"):
-        centre = (sub.px_lo + sub.px_hi) / 2
-        rng_axis = [M.range_from_apparent_px(c, mid, ci1["fx"]) for c in centre]
-        ax.plot(rng_axis, sub.rate, marker="o",
-                label=f"{mid} ({g.SIZES[mid]*1000:.0f} mm)")
-    ax.set_xlabel("range (m, derived: +/-10%)"); ax.set_ylabel("detection rate")
-    ax.legend(fontsize=7); ax.grid(alpha=0.3)
-    ax.set_title("Detection rate vs range (derived from apparent size)")
-    fig.tight_layout(); fig.savefig("results/detection_rate_vs_range.png", dpi=150)
+    # Figure 3: issue #2's "detection rate vs range", corrected the same way as figure 1.
+    # Derived from px via the pinhole relation, so it inherits the focal length's ~+/-10%.
+    fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 4.0))
+    for grp in sorted(vizstyle.SIZE_COLORS):
+        sub = rates1[(rates1.group == grp) & (rates1.n > 0)].sort_values("bin_lo")
+        if not len(sub):
+            continue
+        centre = (sub.bin_lo + sub.bin_hi) / 2
+        rng_axis = [M.range_from_apparent_px(c, size_to_mid[grp], ci1["fx"]) for c in centre]
+        color, marker = vizstyle.SIZE_COLORS[grp], vizstyle.SIZE_MARKERS[grp]
+        ax.plot(rng_axis, sub.rate, marker=marker, color=color, label=f"{grp:.0f} mm")
+        ax.fill_between(rng_axis, sub.ci_lo, sub.ci_hi, color=color, alpha=0.15, linewidth=0)
+    ax.set_xlabel("range (m, derived: +/-10%)")
+    ax.set_ylabel("detection rate")
+    ax.set_ylim(-0.05, 1.05)
+    ax.legend(loc="upper right")
+    ax.set_title("Detection probability vs range (derived from apparent size)")
+    fig.tight_layout()
+    vizstyle.save(fig, "detection_rate_vs_range")
 
     # Figure 4: issue #2's "translation error vs range". NOT accuracy -- single-marker
     # PnP scored against the multi-marker board reference. Caption says so.
@@ -165,25 +228,35 @@ def main(dataset_dir):
         obs.setdefault(("test1", r.frame_idx), {})[int(r.marker_id)] = np.array(
             [[r.c0x, r.c0y], [r.c1x, r.c1y], [r.c2x, r.c2y], [r.c3x, r.c3y]])
     Km = np.array([[ci1["fx"], 0, ci1["cx"]], [0, ci1["fy"], ci1["cy"]], [0, 0, 1]])
-    lay = L.load_layout("config/board_layout.yaml")
     perr = M.pose_error_vs_reference(obs, lay, Km)
     perr.to_csv("results/pose_error_vs_reference.csv", index=False)
     RANGE_BINS = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.5]
-    fig, ax = plt.subplots(figsize=(7, 4.5))
+    fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 4.0))
     if len(perr):
-        st = M.binned_stats(perr, "trans_err_m", "range_m", RANGE_BINS)
-        st.to_csv("results/trans_err_vs_range.csv", index=False)
-        centre = (st.bin_lo + st.bin_hi) / 2
-        ax.errorbar(centre, st["mean"] * 1000, yerr=st["std"] * 1000,
-                    marker="o", capsize=3)
-        summary["trans_err_vs_range_mm"] = {
-            f"{lo}-{hi}": (None if np.isnan(mu) else round(mu * 1000, 1))
-            for lo, hi, mu in zip(st.bin_lo, st.bin_hi, st["mean"])}
+        perr = perr.assign(size_mm=perr.marker_id.map(
+            lambda mid: round(g.SIZES[int(mid)] * 1000, 1)))
+        trans_err_summary = {}
+        for grp, sub in perr.groupby("size_mm"):
+            st = M.binned_stats(sub, "trans_err_m", "range_m", RANGE_BINS)
+            valid = (st.n > 0).to_numpy()
+            centre = ((st.bin_lo + st.bin_hi) / 2).to_numpy()
+            color = vizstyle.SIZE_COLORS.get(grp, vizstyle.TEXT_PRIMARY)
+            marker = vizstyle.SIZE_MARKERS.get(grp, "o")
+            ax.errorbar(centre[valid], st["mean"].to_numpy()[valid] * 1000,
+                        yerr=st["std"].to_numpy()[valid] * 1000,
+                        marker=marker, color=color, capsize=3, label=f"{grp:.0f} mm")
+            trans_err_summary[f"{grp:.0f}mm"] = {
+                f"{lo}-{hi}": (None if np.isnan(mu) else round(mu * 1000, 1))
+                for lo, hi, mu in zip(st.bin_lo, st.bin_hi, st["mean"])}
+        summary["trans_err_vs_range_mm"] = trans_err_summary
+        M.binned_stats(perr, "trans_err_m", "range_m", RANGE_BINS).to_csv(
+            "results/trans_err_vs_range.csv", index=False)
     ax.set_xlabel("range (m)")
     ax.set_ylabel("translation vs board reference (mm)")
-    ax.grid(alpha=0.3)
+    ax.legend()
     ax.set_title("Single-marker vs board reference (self-consistency, NOT accuracy)")
-    fig.tight_layout(); fig.savefig("results/trans_err_vs_range.png", dpi=150)
+    fig.tight_layout()
+    vizstyle.save(fig, "trans_err_vs_range")
 
     # Stage 4: IMU validation -- the only camera-INDEPENDENT check (spec 4).
     # (a) Gravity: the board does not move relative to gravity, so the angle between the
