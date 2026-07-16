@@ -13,10 +13,12 @@ perception packages.
 
 ```
 recorder/   run_recorder.py    ROS 2 capture sequencer (per-run rosbag + ArUco/depth log)
+            record_bag.sh      plain rosbag capture (operator-driven runs)
 collage/    aruco_collage.py   true-scale A3 ArUco print-target generator
 config/     run_plan.yaml       the planned capture runs
             marker_sizes.yaml   id -> black-square size (m), used by the recorder
-docs/       experiment_setup.md full experiment design, variables, acceptance criteria
+docs/       capture_2026-07-02.md  what the pool session ACTUALLY recorded (read this first)
+            experiment_setup.md full experiment design, variables, acceptance criteria
             onday_runsheet.md   on-day pool checklist + enumerated runs
 print/      aruco_collage_A3.pdf generated print target (A3 landscape, 2 pages)
 ```
