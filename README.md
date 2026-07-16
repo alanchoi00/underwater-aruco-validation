@@ -61,6 +61,10 @@ ros2 topic hz /zed/zed_node/left/image_rect_color/compressed
 ros2 topic hz /zed/zed_node/odom
 ```
 
+The odom check is the one that matters. 2026-07-02 lost it, and with it any ground truth,
+so every range in those results is measured against the ArUco pose itself, which is the
+thing under test. `capture/2026-07-02.md` records what that cost.
+
 ## 3. Decode the bags
 
 Once per run, in the **ROS 2 container**. This is the only step that needs ROS, and
@@ -90,12 +94,3 @@ docker run --rm -v "$PWD":/work uwaruco-analysis python -m pytest -q
 ```
 
 See `analysis/README.md` for what each stage does.
-
-## On ground truth
-
-The 2026-07-02 capture recorded **no ground truth**: range and heading were never
-measured, and ZED odometry was not in the bag. `record_bag.sh` fixes this by recording
-`/zed/zed_node/odom` and `/zed/zed_node/pose`, which give a metric trajectory. Record
-them. Without a metric reference, detection range can only be reported against the ArUco
-pose itself, which is the thing under test, and translation accuracy is not measurable at
-all. See `capture/2026-07-02.md`.
