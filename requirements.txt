@@ -1,6 +1,0 @@
-numpy
-opencv-contrib-python
-reportlab
-pyyaml
-# reportlab is only needed by collage/aruco_collage_a4.py (print-target generation).
-# recorder/record_bag.sh uses ros2 bag from your ROS 2 install, not pip.

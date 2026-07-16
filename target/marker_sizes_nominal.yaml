@@ -1,0 +1,14 @@
+dictionary: DICT_ARUCO_ORIGINAL
+marker_size_m:
+  201: 0.15564
+  202: 0.15564
+  301: 0.07782
+  302: 0.04669
+  303: 0.04669
+  304: 0.04669
+  305: 0.04669
+  401: 0.03696
+  402: 0.03696
+note: 'NOMINAL black-square side length (m): what this PDF requests. The printed board
+  may differ; measure it and record marker_sizes_measured.yaml, which is what the
+  analysis actually reads.'

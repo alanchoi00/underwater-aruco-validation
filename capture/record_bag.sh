@@ -10,7 +10,11 @@
 # Override the destination with DATASET_DIR=/some/path ./record_bag.sh name
 #
 # ---------------------------------------------------------------------------
-# PROVENANCE: reconstructed from the 2026-07-02 pool capture (alan-1, alan-2).
+# PROVENANCE: this is NOT the script that ran on 2026-07-02. It is that script
+# corrected, and it is what you should run next time. The 2026-07-02 session recorded
+# raw imagery and no odometry, which is exactly what the two lessons below fix, so do
+# not read this file as a record of what produced those bags. For that, see
+# capture/2026-07-02.md, which describes the session as it actually happened.
 # The topic list below was verified against those bags -- see "verified" section.
 #
 # TWO LESSONS FROM THAT CAPTURE, both fixed here. Read them before changing the

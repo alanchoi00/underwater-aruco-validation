@@ -9,14 +9,14 @@ import os
 import numpy as np
 import yaml
 
-_CFG_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "config")
-_MEASURED = os.path.join(_CFG_DIR, "marker_sizes_measured.yaml")
-_NOMINAL = os.path.join(_CFG_DIR, "marker_sizes.yaml")
+_TARGET_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "target")
+_MEASURED = os.path.join(_TARGET_DIR, "marker_sizes_measured.yaml")
+_NOMINAL = os.path.join(_TARGET_DIR, "marker_sizes_nominal.yaml")
 
 # The MEASURED sizes are required, with no fallback. The board printed at ~95.9%
 # scale, so silently loading the nominal table would inflate every range by 4.1% --
 # a wrong answer is worse than a crash. marker_sizes.yaml is rewritten by
-# collage/aruco_collage_a4.py on every run, so the correction cannot live there.
+# target/aruco_collage_a4.py on every run, so the correction cannot live there.
 if not os.path.exists(_MEASURED):
     raise FileNotFoundError(
         f"{_MEASURED} is missing. The nominal sizes in {_NOMINAL} describe the PDF, "

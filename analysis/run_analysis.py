@@ -78,7 +78,7 @@ def main(dataset_dir):
     os.makedirs("results", exist_ok=True)
     summary = {"opencv": cv2.__version__, "host_cpu": detect.host_cpu(),
                "code_version": code_version(), "runs": {}}
-    lay = L.load_layout("config/board_layout.yaml")
+    lay = L.load_layout("target/board_layout.yaml")
     trials_by_run = {}
     rng_by_run = {}
     rng_board_by_run = {}
@@ -110,7 +110,7 @@ def main(dataset_dir):
             rng[int(fi)] = M.range_from_apparent_px(
                 big.apparent_px, int(big.marker_id), ci["fx"])
 
-        lay_for_range = L.load_layout("config/board_layout.yaml")
+        lay_for_range = L.load_layout("target/board_layout.yaml")
         Kmat_run = np.array([[ci["fx"], 0, ci["cx"]],
                              [0, ci["fy"], ci["cy"]], [0, 0, 1]])
         # Range to the BOARD, for the trajectory figure. Apparent-size range is wrong

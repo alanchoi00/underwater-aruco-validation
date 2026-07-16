@@ -5,7 +5,7 @@ This is the only file in the repo that imports ROS. Everything downstream reads 
 dataset it writes, so the analysis never needs rclpy and can pin its own OpenCV.
 
 ROS imports are deliberately deferred into main() so the schema constants stay
-importable from the ROS-free analysis image (tests/test_extract_schema.py).
+importable from the ROS-free analysis image (analysis/tests/test_extract_schema.py).
 
 Usage (inside the ROS 2 Jazzy container):
     source /opt/ros/jazzy/setup.bash

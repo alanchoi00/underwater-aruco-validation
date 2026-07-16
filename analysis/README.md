@@ -23,11 +23,11 @@ out to it; pass the commit SHA in via `ANALYSIS_GIT_SHA` as shown above so it la
 
 Tests:
 
-    docker run --rm -v "$PWD":/work uwaruco-analysis python -m pytest tests/ -v
+    docker run --rm -v "$PWD":/work uwaruco-analysis python -m pytest -q
 
 ## Why the version pin matters
 
 OpenCV rewrote the ArUco module in 4.7. The ROS 2 Jazzy container ships cv2 4.6
 (legacy API: no `ArucoDetector`, no `generateImageMarker`). Detection results are not
-comparable across that boundary, so this image pins 4.10 and `tests/test_env.py`
+comparable across that boundary, so this image pins 4.10 and `analysis/tests/test_env.py`
 enforces the floor.

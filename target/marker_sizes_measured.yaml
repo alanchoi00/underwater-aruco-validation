@@ -4,7 +4,7 @@ note: >
   The board was printed at ~95.9% scale, NOT the 100% the collage generator assumes
   (almost certainly "fit to printable area": 0.9589 ~ 201.4/210, a printable width
   with ~4 mm margins). marker_sizes.yaml holds the NOMINAL sizes and is REGENERATED
-  by collage/aruco_collage_a4.py, so the correction must never live there.
+  by target/aruco_collage_a4.py, so the correction must never live there.
   Size-weighted least-squares print scale over all 9 markers: 0.9589, residuals
   < 0.4 mm -- consistent with one uniform scale plus ruler noise.
   Corroborated independently by the bundle: 201->202 becomes 426.8 mm, versus 420 mm
