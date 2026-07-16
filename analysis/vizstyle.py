@@ -70,7 +70,9 @@ def log_px_ticks(ax):
     answer "is that 21 px or 40 px?". Replace with an explicit tick set and disable
     minor ticks so no stray unlabelled/scientific ticks slip back in.
     """
-    ticks = [10, 15, 21, 30, 50, 75, 100, 150, 200]
+    # No 200: the largest observed apparent size is ~170 px, and on a log axis a 200
+    # tick sits close enough to 150 that the two labels collide into "150200".
+    ticks = [10, 15, 21, 30, 50, 75, 100, 150]
     ax.set_xscale("log")
     ax.set_xticks(ticks)
     ax.set_xticklabels([str(t) for t in ticks])
