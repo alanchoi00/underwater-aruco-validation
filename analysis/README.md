@@ -1,20 +1,20 @@
 # Offline analysis
 
-Two environments, on purpose.
+Two environments, on purpose. See the root README for the container shell these commands
+assume.
 
-**Stage 0 (ROS container)** decodes the rosbags once into a plain dataset:
+**Stage 0 (ROS container)** decodes the rosbags once into a plain dataset. Run from the
+host, since it needs both the bags and this repo mounted:
 
+    zstd -d <bag>.mcap.zstd                     # rosbag2 cannot read .mcap.zstd directly
     docker run --rm -v <bags>:/bags:ro -v "$PWD":/work <ros-jazzy-image> \
         bash -lc "source /opt/ros/jazzy/setup.bash && \
-                  python3 /work/analysis/extract_bags.py /bags/test1 /work/dataset/test1"
+                  python3 /work/analysis/extract_bags.py /bags/alan1_0.mcap /work/dataset/test1"
 
-Bags are zstd-compressed; decompress first with `zstd -d <bag>.mcap.zstd`.
+**Stages 1-6** read only `dataset/` and never import ROS:
 
-**Stages 1-6 (this image)** read only `dataset/` and never import ROS:
-
-    docker build -t uwaruco-analysis .
-    docker run --rm -v "$PWD":/work \
-      uwaruco-analysis python analysis/run_analysis.py dataset/
+    python analysis/run_analysis.py dataset/
+    python -m pytest -q
 
 `run_analysis.py` stamps the analysis commit into `results/summary.json`, so a figure in
 the report traces back to the code that made it. The image carries `git` for exactly this,
@@ -24,18 +24,12 @@ and git otherwise refuses to read a repo it thinks belongs to someone else.
 Set `ANALYSIS_GIT_SHA` to override it. That matters when `.git` is not mounted, for
 instance in CI, where the stamp would otherwise fall back to `"unknown"`:
 
-    docker run --rm -v "$PWD":/work \
-      -e ANALYSIS_GIT_SHA="$(git rev-parse --short HEAD)" \
-      uwaruco-analysis python analysis/run_analysis.py dataset/
-
-Tests:
-
-    docker run --rm -v "$PWD":/work uwaruco-analysis python -m pytest -q
+    ANALYSIS_GIT_SHA=$(git rev-parse --short HEAD) python analysis/run_analysis.py dataset/
 
 ## Editing this code
 
 Open the repo in the devcontainer (`.devcontainer/devcontainer.json`, "Reopen in
-Container"). It builds from this same `Dockerfile`, so the editor resolves against the
+Container"). It builds from the same root `Dockerfile`, so the editor resolves against the
 pinned versions the code actually runs on.
 
 This is not cosmetic. The host here is Python 3.10 with cv2 4.5.4, where

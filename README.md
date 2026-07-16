@@ -16,25 +16,30 @@ needed or wanted: the detection results depend on the exact OpenCV version, whic
 `requirements.txt` is pinned and `analysis/tests/test_env.py` asserts the running cv2 is
 that pin rather than merely a recent one.
 
+Build the image and start a container you keep around:
+
 ```bash
 docker build -t uwaruco-analysis .
+docker run -d --name uwaruco -v "$PWD":/work uwaruco-analysis sleep infinity
+docker exec -it uwaruco bash
 ```
 
-Step 3 additionally needs a **ROS 2 Jazzy image**, which is why Docker is not optional
-even if you have the Python packages locally.
+**Every command below runs in that shell.** The workspace is bind mounted, so edits on
+the host are live inside; there is no need to rebuild or restart between runs. When you
+are done: `docker rm -f uwaruco`.
 
-**VS Code with the Dev Containers extension** is optional and only affects editing. If
-you "Reopen in Container", drop the `docker run --rm -v "$PWD":/work uwaruco-analysis`
-prefix from every command below and just run `python ...`. Everything else is identical,
-because the devcontainer builds from the same `Dockerfile`.
+**VS Code with the Dev Containers extension** is an optional alternative. "Reopen in
+Container" gives you the same shell, running the same commands, because it builds from
+the same `Dockerfile`.
 
-`capture/record_bag.sh` is the exception to all of this: it runs on the ROV against a
-live ZED, not on your machine.
+Two things fall outside that shell. Step 3 needs a **ROS 2 Jazzy** container, which is
+why Docker is not optional even if you have the Python packages locally. And
+`capture/record_bag.sh` runs on the ROV against a live ZED, not on your machine.
 
 ## 1. Make the target
 
 ```bash
-docker run --rm -v "$PWD":/work uwaruco-analysis python target/aruco_collage_a4.py
+python target/aruco_collage_a4.py
 ```
 
 Writes `target/aruco_collage_A4.pdf` and `target/marker_sizes_nominal.yaml`.
@@ -67,11 +72,13 @@ thing under test. `capture/2026-07-02.md` records what that cost.
 
 ## 3. Decode the bags
 
-Once per run, in the **ROS 2 container**. This is the only step that needs ROS, and
+Once per run, in a **ROS 2 Jazzy** container. This is the only step that needs ROS, and
 `analysis/extract_bags.py` is the only file that imports it; everything downstream reads
 the plain PNG and CSV dataset it writes. That split is what lets this repo pin its own
 OpenCV, since the ROS image ships cv2 4.6 against the 4.10 the detection results depend
 on.
+
+From the host, since it needs both the bags and this repo mounted:
 
 ```bash
 zstd -d alan1_0.mcap.zstd                       # rosbag2 cannot read .mcap.zstd directly
@@ -80,17 +87,20 @@ docker run --rm -v /path/to/bags:/bags:ro -v "$PWD":/work <ros-jazzy-image> \
             python3 /work/analysis/extract_bags.py /bags/alan1_0.mcap /work/dataset/test1"
 ```
 
+If you already have a ROS container running with both mounted, `docker exec` into it and
+run the inner command instead.
+
 ## 4. Analyse
 
 ```bash
-docker run --rm -v "$PWD":/work uwaruco-analysis python analysis/run_analysis.py dataset/
+python analysis/run_analysis.py dataset/
 ```
 
 Figures and CSVs land in `results/`, each stamped with the analysis commit so a figure in
 the report traces back to the code that made it. Tests:
 
 ```bash
-docker run --rm -v "$PWD":/work uwaruco-analysis python -m pytest -q
+python -m pytest -q
 ```
 
 See `analysis/README.md` for what each stage does.
