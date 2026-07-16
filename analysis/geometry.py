@@ -75,6 +75,18 @@ def board_pts(layout, mrk):
     return np.stack([x, y, np.zeros_like(x)], -1)
 
 
+def board_centroid(layout):
+    """Centroid of the marker centres, in board coords (metres).
+
+    The layout's gauge is marker 201 at the origin, but that is a SOLVER constraint --
+    it fixes the bundle's 3-DOF ambiguity -- not a meaningful reference point. Marker
+    201 sits at the board's left edge, ~208 mm from the middle, so a pose translation
+    taken raw measures distance to that corner marker rather than to the board. Offset
+    by this centroid when reporting a range.
+    """
+    return np.asarray(layout, float)[:, :2].mean(axis=0)
+
+
 def project(Xb, rv, tv, fr, fx, fy, cx, cy):
     """Pinhole projection. Xb (M,4,3) board pts, rv/tv (N,3) poses, fr (M,) frame index."""
     R = rodrigues(rv)[fr]

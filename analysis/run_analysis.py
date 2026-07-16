@@ -81,6 +81,7 @@ def main(dataset_dir):
     lay = L.load_layout("config/board_layout.yaml")
     trials_by_run = {}
     rng_by_run = {}
+    rng_board_by_run = {}
     inc_by_run = {}
 
     for run in ("test1", "test2"):
@@ -100,14 +101,42 @@ def main(dataset_dir):
             "latency_ms_p95": float(timing.latency_ms.quantile(0.95)),
         }
 
-        # Range per frame from the largest marker present -- the most reliable one.
+        # Range per frame from the largest marker present. Apparent-size range is the
+        # right axis for the DETECTION figures -- there apparent size is the independent
+        # variable and this is just its honest metric label.
         rng = {}
         for fi, sub in det[det.marker_id.isin(g.SIZES)].groupby("frame_idx"):
             big = sub.loc[sub.apparent_px.idxmax()]
             rng[int(fi)] = M.range_from_apparent_px(
                 big.apparent_px, int(big.marker_id), ci["fx"])
 
+        lay_for_range = L.load_layout("config/board_layout.yaml")
+        Kmat_run = np.array([[ci["fx"], 0, ci["cx"]],
+                             [0, ci["fy"], ci["cy"]], [0, 0, 1]])
+        # Range to the BOARD, for the trajectory figure. Apparent-size range is wrong
+        # here on three counts: it tracks whichever marker looks biggest (which flips
+        # between 201 and 202 fifty-five times, injecting ~52 mm jumps against 15 mm of
+        # real frame-to-frame motion); it assumes head-on, so it drifts ~-134 mm at 30+
+        # deg incidence -- exactly during the yaw turns; and it throws away the corner
+        # geometry. The board pose solves from ANY visible subset, down to one marker,
+        # so it always refers to the same physical point. Offset to the marker centroid:
+        # the 201 gauge is the bundle's constraint, not a sensible place to measure from.
+        cen = g.board_centroid(lay_for_range)
+        cen3 = np.array([cen[0], cen[1], 0.0])
+        rng_board = {}
+        for fi, sub in det[det.marker_id.isin(g.SIZES)].groupby("frame_idx"):
+            dets = {int(r.marker_id): np.array([[r.c0x, r.c0y], [r.c1x, r.c1y],
+                                                [r.c2x, r.c2y], [r.c3x, r.c3y]])
+                    for r in sub.itertuples()}
+            try:
+                rv_b, tv_b = L.board_pnp(lay_for_range, dets, Kmat_run)
+            except ValueError:
+                continue
+            R_b = g.rodrigues(rv_b[None])[0]
+            rng_board[int(fi)] = float(np.linalg.norm(R_b @ cen3 + tv_b))
+
         rng_by_run[run] = rng
+        rng_board_by_run[run] = rng_board
 
         rates = M.detection_rate_by_px_bin(det, {m: n_frames for m in g.SIZES}, PX_BINS)
         rates.to_csv(f"results/{run}_detection_rate_by_px.csv", index=False)
@@ -355,8 +384,8 @@ def main(dataset_dir):
     imu1_full = pd.read_csv(os.path.join(dataset_dir, "test1", "imu.csv"))
     t0 = min(frames1["stamp"].min(), imu1_full["stamp"].min())
     frame_stamp1 = dict(zip(frames1["frame_idx"], frames1["stamp"]))
-    pts = sorted((frame_stamp1[fi] - t0, r) for fi, r in rng_by_run["test1"].items()
-                 if fi in frame_stamp1)
+    pts = sorted((frame_stamp1[fi] - t0, r)
+                 for fi, r in rng_board_by_run["test1"].items() if fi in frame_stamp1)
     bag_end_s = float(imu1_full["stamp"].max() - t0)
     fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 3.8))
     if pts:
@@ -387,7 +416,7 @@ def main(dataset_dir):
                 ha="center", va="top", fontsize=7.5, color=vizstyle.TEXT_SECONDARY)
         ax.legend(loc="upper left")
     ax.set_xlabel("time since run start (s)")
-    ax.set_ylabel("range (m, derived: +/-10%)")
+    ax.set_ylabel("range to board centroid (m, +/-10%)")
     ax.set_title("Walk-back profile: detection ends at ~4.9 m, ~3 m before the walk does")
     fig.tight_layout()
     vizstyle.save(fig, "range_vs_time")

@@ -99,3 +99,15 @@ def test_project_is_sensitive_to_focal_length(layout_true, K, synth_views):
     a = g.project(Xb, rv[None], tv[None], fr, **K)
     b = g.project(Xb, rv[None], tv[None], fr, **{**K, "fx": K["fx"] * 1.1})
     assert np.abs(a - b).max() > 5.0
+
+
+def test_board_centroid_is_the_mean_of_the_marker_centres(layout_true):
+    c = g.board_centroid(layout_true)
+    np.testing.assert_allclose(c, layout_true[:, :2].mean(axis=0), atol=1e-12)
+
+
+def test_board_centroid_is_offset_from_the_201_gauge(layout_true):
+    """201 is the bundle's gauge and sits at the board edge, not its middle."""
+    c = g.board_centroid(layout_true)
+    assert np.linalg.norm(c) > 0.15          # ~208 mm away from marker 201
+    np.testing.assert_allclose(layout_true[g.IDX[201]][:2], [0, 0], atol=1e-12)
