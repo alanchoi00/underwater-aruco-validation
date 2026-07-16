@@ -374,10 +374,10 @@ def main(dataset_dir):
     vizstyle.save(fig, "range_vs_time")
 
     # Figure 7: incidence-angle histogram (spec 3.1c / limitation 10). Two disconnected
-    # viewing-angle regimes -- test1 near head-on, test2 oblique -- with an empty
-    # 20-45 deg band between them. This is why NO detection-rate-vs-angle curve is
-    # reported anywhere in this pipeline: there is no controlled angle sweep, and angle
-    # is confounded with range and marker size (incidence is itself a PnP output).
+    # viewing-angle regimes -- test1 near head-on, test2 oblique. NO detection-rate-vs-
+    # angle curve is reported because angle was never controlled and is confounded with
+    # range and marker size (incidence is itself a PnP output). The gap between the
+    # regimes is a consequence of uncontrolled operation, not a data-coverage problem.
     fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 3.8))
     bins = np.arange(0, 91, 5)
     run_colors = {"test1": vizstyle.SIZE_COLORS[149.4], "test2": vizstyle.SIZE_COLORS[35.6]}
@@ -387,14 +387,10 @@ def main(dataset_dir):
             ax.hist(inc, bins=bins, color=run_colors[run], alpha=0.55,
                     label=f"{run} (median {np.median(inc):.0f} deg, n={len(inc)})",
                     edgecolor="white", linewidth=0.5)
-    ax.axvspan(20, 45, color=vizstyle.GHOST_COLOR, alpha=0.3, zorder=0)
-    ymax = ax.get_ylim()[1]
-    ax.text(32.5, ymax * 0.9, "no controlled\nsweep here",
-            ha="center", va="top", fontsize=7.5, color=vizstyle.TEXT_SECONDARY)
     ax.set_xlabel("incidence angle (deg, 0 = head-on)")
     ax.set_ylabel("detections")
-    ax.set_title("Incidence angle: two disconnected regimes, not a swept curve\n"
-                 "angle is confounded with range/size -- no detection-vs-angle curve is reported")
+    ax.set_title("Incidence angle: two regimes, no sweep\n"
+                 "angle was never controlled and is confounded with range and marker size")
     ax.legend(loc="upper right")
     fig.tight_layout()
     vizstyle.save(fig, "incidence_angle_hist")
