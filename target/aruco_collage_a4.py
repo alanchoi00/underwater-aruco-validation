@@ -109,13 +109,24 @@ def build(out_pdf,dict_name,markers,dpi=300,margin_mm=10.0,gap_mm=10.0,label_mm=
                 c.drawImage(p,x,y,width=w,height=h)
                 c.showPage()
     c.save()
-    sc=os.path.join(os.path.dirname(out_pdf) or ".","marker_sizes.yaml")
+    # Write beside THIS script, not beside out_pdf. Keying it to --out meant the sizes
+    # file landed wherever the caller aimed the PDF while the tracked copy sat elsewhere
+    # and silently rotted. These are NOMINAL sizes: what the PDF asks the printer for,
+    # not what the printed board measures. The 2026-07-02 board came out at 95.9% scale,
+    # so the analysis reads marker_sizes_measured.yaml instead; see that file.
+    sc=os.path.join(os.path.dirname(os.path.abspath(__file__)),"marker_sizes_nominal.yaml")
     with open(sc,"w") as f:
-        yaml.safe_dump({"dictionary":dict_name,"note":"black-square side length (m)",
+        yaml.safe_dump({"dictionary":dict_name,
+                        "note":"NOMINAL black-square side length (m): what this PDF "
+                               "requests. The printed board may differ; measure it and "
+                               "record marker_sizes_measured.yaml, which is what the "
+                               "analysis actually reads.",
                         "marker_size_m":sizes},f,sort_keys=True)
     return sc
 
 if __name__=="__main__":
-    ap=argparse.ArgumentParser(); ap.add_argument("--out",default="aruco_collage_A4.pdf")
+    ap=argparse.ArgumentParser()
+    ap.add_argument("--out",default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                 "aruco_collage_A4.pdf"))
     ap.add_argument("--dict",default="DICT_ARUCO_ORIGINAL"); a=ap.parse_args()
     print("wrote",a.out,"and",build(a.out,a.dict,DOCK_MARKERS))

@@ -1,6 +1,6 @@
 """Stage 3b: cross-check the print scale from A4 sheet geometry.
 
-The printed markers were ruler-measured (see config/marker_sizes_measured.yaml,
+The printed markers were ruler-measured (see target/marker_sizes_measured.yaml,
 k=0.9589) -- that measurement is the authoritative print scale. This stage is an
 INDEPENDENT image-based cross-check of it, not a substitute: a printer scales CONTENT,
 not paper (A4 is 210x297 mm by definition), so measuring a sheet in units where the
