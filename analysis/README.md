@@ -13,7 +13,13 @@ Bags are zstd-compressed; decompress first with `zstd -d <bag>.mcap.zstd`.
 **Stages 1-6 (this image)** read only `dataset/` and never import ROS:
 
     docker build -f analysis/Dockerfile -t uwaruco-analysis .
-    docker run --rm -v "$PWD":/work uwaruco-analysis python analysis/run_analysis.py dataset/
+    docker run --rm -v "$PWD":/work \
+      -e ANALYSIS_GIT_SHA="$(git rev-parse --short HEAD)$(git diff --quiet HEAD || echo -dirty)" \
+      uwaruco-analysis python analysis/run_analysis.py dataset/
+
+The image has no `git` binary (kept slim on purpose), so `code_version()` cannot shell
+out to it; pass the commit SHA in via `ANALYSIS_GIT_SHA` as shown above so it lands in
+`results/summary.json` instead of falling back to `"unknown"`.
 
 Tests:
 
