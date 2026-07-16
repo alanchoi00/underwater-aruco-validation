@@ -54,9 +54,15 @@ def integrate_gyro_yaw(stamps, gyro_z):
 
 
 def pnp_delta_yaw(rv0, rv1):
-    """Relative yaw (rad) between two PnP poses."""
+    """Signed relative yaw (rad) about the optical-frame vertical (Y) axis.
+
+    The camera is an optical frame (x right, y down, z forward), so yaw is rotation
+    about Y. Returns a SIGNED angle so it can be compared against integrate_gyro_yaw.
+    Note the gyro measures yaw about the IMU's up (z) axis, so the two may differ by a
+    sign depending on axis convention -- reconcile that against real data before reading
+    a mismatch as error.
+    """
     R0 = g.rodrigues(np.asarray(rv0, float)[None])[0]
     R1 = g.rodrigues(np.asarray(rv1, float)[None])[0]
     Rr = R0.T @ R1
-    theta = np.arccos(np.clip((np.trace(Rr) - 1) / 2, -1, 1))
-    return float(theta)
+    return float(np.arctan2(Rr[0, 2], Rr[2, 2]))

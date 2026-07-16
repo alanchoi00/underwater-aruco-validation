@@ -51,3 +51,10 @@ def test_pnp_delta_yaw_matches_a_known_relative_rotation():
     rv0 = np.array([0.0, 0.0, 0.0])
     rv1 = np.array([0.0, np.deg2rad(30.0), 0.0])
     assert abs(ic.pnp_delta_yaw(rv0, rv1)) == pytest.approx(np.deg2rad(30.0), abs=1e-6)
+
+
+def test_pnp_delta_yaw_is_signed():
+    """A negative Y rotation must return a negative yaw, not a magnitude."""
+    rv0 = np.array([0.0, 0.0, 0.0])
+    rv1 = np.array([0.0, np.deg2rad(-25.0), 0.0])
+    assert ic.pnp_delta_yaw(rv0, rv1) == pytest.approx(np.deg2rad(-25.0), abs=1e-6)
