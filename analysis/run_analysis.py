@@ -197,19 +197,23 @@ def main(dataset_dir):
         except ValueError:
             pass
 
-    # (a) gravity check
+    # (a) gravity check. The IMU accel is in the ZED body frame (z up); the PnP board
+    # normal is in the optical frame (z forward). Reconcile with the standard REP-103
+    # optical<-body rotation before comparing, or the tilt reads ~90 deg off.
+    R_OPT_FROM_BODY = np.array([[0, -1, 0], [0, 0, -1], [1, 0, 0]], float)
     tilt = []
     for fi, (rvec, _tv) in board_pose.items():
         j = int(np.clip(np.searchsorted(imu_t, frame_stamp[fi]), 0, len(accel) - 1))
-        tilt.append(ic.tilt_residual_deg(rvec, accel[j]))
+        tilt.append(ic.tilt_residual_deg(rvec, R_OPT_FROM_BODY @ accel[j]))
     tilt = np.array(tilt)
     summary["imu_gravity_check"] = {
         "n_frames": int(len(tilt)),
         "board_tilt_from_vertical_deg_median": round(float(np.median(tilt)), 2)
             if len(tilt) else None,
         "std_deg": round(float(np.std(tilt)), 2) if len(tilt) else None,
-        "note": "board-normal vs gravity; median = board tilt from vertical, std = PnP "
-                "attitude consistency vs the absolute IMU gravity reference (lower better)",
+        "note": "board-normal vs gravity (IMU accel rotated body->optical, REP-103); "
+                "median = board tilt from vertical, std = PnP attitude consistency vs "
+                "the absolute IMU gravity reference (lower std better)",
     }
 
     # (b) yaw-turn check
