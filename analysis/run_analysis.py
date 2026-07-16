@@ -21,6 +21,11 @@ from analysis import segment, vizstyle
 
 PX_BINS = [8, 12, 16, 21, 28, 38, 52, 72, 100, 140, 200, 300]
 
+# A bin with one or two trials carries no information but its Wilson CI spans most of
+# the axis, so it dominates the figure. Suppress below this, and log what was dropped --
+# a silently truncated plot reads as "we measured everywhere" when we did not.
+MIN_TRIALS_PER_BIN = 10
+
 
 def code_version():
     """Git SHA of this analysis repo, so a figure in the report traces to its code.
@@ -146,9 +151,18 @@ def main(dataset_dir):
     det1, frames1, _, ci1 = load_run(dataset_dir, "test1")
     trials1 = trials_by_run["test1"]
     rates1 = M.rate_by_bin(trials1, PX_BINS)
+    # Bins with n < MIN_TRIALS_PER_BIN carry Wilson CIs spanning most of the axis and
+    # would visually swamp the figures below; suppress them for plotting only (the full
+    # table, including these bins, still goes to CSV via rates1/rate_by_bin unchanged).
+    suppressed = rates1[(rates1.n > 0) & (rates1.n < MIN_TRIALS_PER_BIN)]
+    summary["suppressed_bins"] = [
+        {"group_mm": float(row.group), "bin_lo_px": float(row.bin_lo),
+         "bin_hi_px": float(row.bin_hi), "n": int(row.n)}
+        for row in suppressed.itertuples()
+    ]
     fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 4.0))
     for grp in sorted(vizstyle.SIZE_COLORS):
-        sub = rates1[(rates1.group == grp) & (rates1.n > 0)].sort_values("bin_lo")
+        sub = rates1[(rates1.group == grp) & (rates1.n >= MIN_TRIALS_PER_BIN)].sort_values("bin_lo")
         if not len(sub):
             continue
         centre = ((sub.bin_lo + sub.bin_hi) / 2).to_numpy()
@@ -165,7 +179,7 @@ def main(dataset_dir):
     ax.set_ylabel("detection rate")
     ax.set_ylim(-0.05, 1.05)
     ax.legend(loc="lower right")
-    ax.set_title("Detection probability vs apparent marker size")
+    ax.set_title("Detection rate vs apparent marker size")
     fig.tight_layout()
     vizstyle.save(fig, "detection_rate_vs_px")
 
@@ -174,10 +188,11 @@ def main(dataset_dir):
     sizes = np.array([g.SIZES[m] for m in sorted(mr)])
     rmax = np.array([mr[m] for m in sorted(mr)])
     k = float(np.sum(sizes * rmax) / np.sum(sizes ** 2))   # least squares through 0
-    fig, ax = plt.subplots(figsize=(vizstyle.COL_W, 3.6))
-    # Same-size markers land at nearly identical (x, y): stagger the offset per point
-    # within a size group so IDs stay legible instead of piling on top of each other.
-    OFFSETS = [(4, 4), (4, -11), (12, 4), (12, -11)]
+    fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 3.6))
+    # Per-point marker-ID labels aren't kept: nobody needs to know that a given 44 mm
+    # marker is 302 vs 304, and with points this close the labels collide. The
+    # size-group legend (colour + marker shape) carries identity instead; the vertical
+    # spread within a group stays visible and shows the measurement variability.
     by_size = {}
     for mid in sorted(mr):
         by_size.setdefault(round(g.SIZES[mid] * 1000, 1), []).append(mid)
@@ -185,10 +200,8 @@ def main(dataset_dir):
         color = vizstyle.SIZE_COLORS.get(size_mm, vizstyle.TEXT_PRIMARY)
         marker = vizstyle.SIZE_MARKERS.get(size_mm, "o")
         for i, mid in enumerate(sorted(mids, key=lambda m: mr[m])):
-            ax.scatter(size_mm, mr[mid], color=color, marker=marker, zorder=3)
-            ax.annotate(str(mid), (size_mm, mr[mid]),
-                        xytext=OFFSETS[i % len(OFFSETS)], textcoords="offset points",
-                        fontsize=7, color=vizstyle.TEXT_SECONDARY)
+            ax.scatter(size_mm, mr[mid], color=color, marker=marker, zorder=3,
+                       label=f"{size_mm:.0f} mm" if i == 0 else None)
     xs = np.linspace(0, sizes.max() * 1100, 50)
     ax.plot(xs, k * xs / 1000, ls="--", c=vizstyle.TEXT_SECONDARY, lw=1,
             label=f"max_range ~ {k:.0f} x side")
@@ -205,7 +218,7 @@ def main(dataset_dir):
     # Derived from px via the pinhole relation, so it inherits the focal length's ~+/-10%.
     fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 4.0))
     for grp in sorted(vizstyle.SIZE_COLORS):
-        sub = rates1[(rates1.group == grp) & (rates1.n > 0)].sort_values("bin_lo")
+        sub = rates1[(rates1.group == grp) & (rates1.n >= MIN_TRIALS_PER_BIN)].sort_values("bin_lo")
         if not len(sub):
             continue
         centre = (sub.bin_lo + sub.bin_hi) / 2
@@ -217,7 +230,7 @@ def main(dataset_dir):
     ax.set_ylabel("detection rate")
     ax.set_ylim(-0.05, 1.05)
     ax.legend(loc="upper right")
-    ax.set_title("Detection probability vs range (derived from apparent size)")
+    ax.set_title("Detection rate vs range (derived from apparent size)")
     fig.tight_layout()
     vizstyle.save(fig, "detection_rate_vs_range")
 
@@ -341,7 +354,16 @@ def main(dataset_dir):
         "- Latency is detectMarkers on the analysis host, not on ROV compute.",
         "- Angle is reported as two regimes (test1 head-on, test2 oblique ~57 deg), NOT "
         "a swept curve: there is no controlled angle sweep and angle is confounded with "
-        "range/size (spec 3.1c).", "",
+        "range/size (spec 3.1c).",
+        f"- {len(summary['suppressed_bins'])} bin(s) with fewer than "
+        f"{MIN_TRIALS_PER_BIN} trials were suppressed from the detection-rate figures "
+        "(their Wilson CI spans most of the axis and would dominate the plot with no "
+        "information); the full per-bin table, including these, is still in "
+        "`detection_trials_test1.csv` / `detection_trials_test2.csv`. Suppressed: " +
+        ("; ".join(f"{b['group_mm']:.0f} mm, {b['bin_lo_px']:.0f}-{b['bin_hi_px']:.0f} px, "
+                   f"n={b['n']}" for b in summary["suppressed_bins"])
+         if summary["suppressed_bins"] else "none") + ".",
+        "",
     ]
     for run, s in summary["runs"].items():
         lines += [f"## {run}", "",
