@@ -14,12 +14,19 @@ Bags are zstd-compressed; decompress first with `zstd -d <bag>.mcap.zstd`.
 
     docker build -f analysis/Dockerfile -t uwaruco-analysis .
     docker run --rm -v "$PWD":/work \
-      -e ANALYSIS_GIT_SHA="$(git rev-parse --short HEAD)$(git diff --quiet HEAD || echo -dirty)" \
       uwaruco-analysis python analysis/run_analysis.py dataset/
 
-The image has no `git` binary (kept slim on purpose), so `code_version()` cannot shell
-out to it; pass the commit SHA in via `ANALYSIS_GIT_SHA` as shown above so it lands in
-`results/summary.json` instead of falling back to `"unknown"`.
+`run_analysis.py` stamps the analysis commit into `results/summary.json`, so a figure in
+the report traces back to the code that made it. The image carries `git` for exactly this,
+and marks `/work` as a safe directory, since the workspace is bind mounted from the host
+and git otherwise refuses to read a repo it thinks belongs to someone else.
+
+Set `ANALYSIS_GIT_SHA` to override it. That matters when `.git` is not mounted, for
+instance in CI, where the stamp would otherwise fall back to `"unknown"`:
+
+    docker run --rm -v "$PWD":/work \
+      -e ANALYSIS_GIT_SHA="$(git rev-parse --short HEAD)" \
+      uwaruco-analysis python analysis/run_analysis.py dataset/
 
 Tests:
 

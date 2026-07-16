@@ -28,6 +28,11 @@
   // Installing them here rather than in the Dockerfile keeps both out of the artifact
   // that certifies the detector version, while still letting you regenerate the print
   // target and lint without a manual pip install.
+  //
+  // git is NOT installed here: it is in analysis/Dockerfile, because run_analysis.py
+  // needs it to stamp the analysis commit into summary.json. Source control and GitLens
+  // inherit it from the image, along with the safe.directory that stops git refusing to
+  // read a bind mounted workspace it thinks belongs to someone else.
   "postCreateCommand": "pip install --no-cache-dir -r target/requirements.txt ruff",
 
   "customizations": {
