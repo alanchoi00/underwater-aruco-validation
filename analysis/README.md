@@ -25,6 +25,18 @@ Tests:
 
     docker run --rm -v "$PWD":/work uwaruco-analysis python -m pytest -q
 
+## Editing this code
+
+Open the repo in the devcontainer (`.devcontainer/devcontainer.json`, "Reopen in
+Container"). It builds from this same `Dockerfile`, so the editor resolves against the
+pinned versions the code actually runs on.
+
+This is not cosmetic. The host here is Python 3.10 with cv2 4.5.4, where
+`cv2.aruco.ArucoDetector` does not exist, so an editor pointed at the host interpreter
+marks correct code as broken and accepts the 4.6 legacy API that the pin exists to avoid.
+
+The devcontainer covers the analysis only. Stage 0 still runs in the ROS container.
+
 ## Why the version pin matters
 
 OpenCV rewrote the ArUco module in 4.7. The ROS 2 Jazzy container ships cv2 4.6
