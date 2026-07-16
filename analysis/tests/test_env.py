@@ -13,16 +13,11 @@ def test_opencv_is_post_aruco_rewrite():
 
 
 def test_opencv_matches_the_pin():
-    """The running cv2 must BE the pinned one, not merely satisfy a floor.
+    """The running cv2 must BE the pin, not merely clear the floor above.
 
-    A floor cannot catch upward drift, and upward drift is what actually happened: a
-    second pip install pulled an unpinned opencv-contrib-python 5.0.0 that shadowed the
-    pinned headless 4.10, so the container ran 5.0.0 while claiming 4.10, and the floor
-    check above waved it through. The study's headline result IS the detector's
-    behaviour, so the version is part of the claim, not a lower bound on it.
-
-    Reads the pin rather than hardcoding it, so bumping requirements.txt moves this test
-    with it instead of leaving a stale literal behind.
+    A floor cannot catch a second package shadowing the pinned one with a NEWER cv2, and
+    the study's result is the detector's behaviour, so the version is part of the claim.
+    Reads the pin so bumping requirements.txt moves this test with it.
     """
     root = pathlib.Path(__file__).resolve().parents[2]
     req = (root / "requirements.txt").read_text()

@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libglib2.0-0 git \
     && rm -rf /var/lib/apt/lists/*
 
+# The workspace is bind mounted, so git sees host-owned files as root and refuses.
 RUN git config --system --add safe.directory /work
 
 COPY requirements.txt /tmp/requirements.txt
