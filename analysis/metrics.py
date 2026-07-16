@@ -110,6 +110,20 @@ def pose_error_vs_reference(obs_by_frame, layout, K):
 
     The marker under test is excluded from its own reference, and at least two other
     board markers must remain, or the frame is skipped.
+
+    CONFOUND -- do not break this metric down by marker size. The leave-one-out
+    reference geometry is not fixed: it depends on which marker is under test, because
+    that marker is the one excluded from the board PnP that generates its own reference.
+    When 201 or 202 (149 mm) is under test, the reference is solved from whatever
+    remains -- for this layout, the tightly-clustered small centre markers (301,
+    302-305, 401, 402) -- a narrow baseline that gives a weak, noisier reference pose.
+    When a 44 mm marker is under test, the reference still includes BOTH 201 and 202,
+    which are 427 mm apart -- a wide baseline that gives a strong, stable reference pose.
+    So grouping this metric's output by marker_id/size measures reference quality, not
+    marker quality, and the size ordering it produces is real but backwards: it looks
+    like "bigger markers have worse pose" when what actually varies is the strength of
+    the reference each series happens to be scored against. Report this metric pooled
+    across all markers only.
     """
     from analysis import layout as L        # local import avoids a circular import
 

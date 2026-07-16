@@ -261,6 +261,14 @@ def main(dataset_dir):
 
     # Figure 4: issue #2's "translation error vs range". NOT accuracy -- single-marker
     # PnP scored against the multi-marker board reference. Caption says so.
+    #
+    # POOLED across all markers -- deliberately NOT broken down by marker size. The
+    # leave-one-out reference geometry that pose_error_vs_reference() builds varies with
+    # which marker is under test (see that function's docstring): testing 201/202 leaves
+    # only the narrow small-marker centre cluster as the reference (weak baseline, weak
+    # pose), while testing a small marker leaves 201+202 (427 mm apart) in the reference
+    # (strong baseline). A per-size split of this metric measures reference quality, not
+    # marker quality, and reads backwards ("bigger markers have worse pose"). Pool it.
     obs = {}
     for r in det1[det1.marker_id.isin(g.SIZES)].itertuples():
         obs.setdefault(("test1", r.frame_idx), {})[int(r.marker_id)] = np.array(
@@ -271,46 +279,30 @@ def main(dataset_dir):
     RANGE_BINS = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.5]
     fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 4.0))
     if len(perr):
-        perr = perr.assign(size_mm=perr.marker_id.map(
-            lambda mid: round(g.SIZES[int(mid)] * 1000, 1)))
-        trans_err_summary = {}
+        st = M.binned_stats(perr, "trans_err_m", "range_m", RANGE_BINS)
         # Same suppression as figures 1/3: a bin with n < MIN_TRIALS_PER_BIN is a single
         # (or handful of) sample(s), not a measured trend, and its std is often NaN
         # (n=1) or wildly unrepresentative -- drop it here too, and log what was dropped.
-        groups_sorted = sorted(perr.size_mm.unique())
-        n_groups = len(groups_sorted)
-        # Small per-series x offset so the four series' error bars don't stack on the
-        # same bin-centre and become an unreadable thicket. Offsets are symmetric around
-        # 0, ordered by marker size (smallest -> most negative).
-        dodge_step = 0.03
-        dodges = {grp: (i - (n_groups - 1) / 2) * dodge_step
-                  for i, grp in enumerate(groups_sorted)}
-        for grp, sub in perr.groupby("size_mm"):
-            st = M.binned_stats(sub, "trans_err_m", "range_m", RANGE_BINS)
-            dropped = st[(st.n > 0) & (st.n < MIN_TRIALS_PER_BIN)]
-            for row in dropped.itertuples():
-                summary["suppressed_bins"].append({
-                    "figure": "trans_err_vs_range", "group_mm": float(grp),
-                    "bin_lo_m": float(row.bin_lo), "bin_hi_m": float(row.bin_hi),
-                    "n": int(row.n)})
-            valid = ((st.n >= MIN_TRIALS_PER_BIN)).to_numpy()
-            centre = ((st.bin_lo + st.bin_hi) / 2).to_numpy() + dodges[grp]
-            color = vizstyle.SIZE_COLORS.get(grp, vizstyle.TEXT_PRIMARY)
-            marker = vizstyle.SIZE_MARKERS.get(grp, "o")
-            ax.errorbar(centre[valid], st["mean"].to_numpy()[valid] * 1000,
-                        yerr=st["std"].to_numpy()[valid] * 1000,
-                        marker=marker, color=color, capsize=3, label=f"{grp:.0f} mm")
-            trans_err_summary[f"{grp:.0f}mm"] = {
-                f"{lo}-{hi}": (None if (np.isnan(mu) or n < MIN_TRIALS_PER_BIN)
-                               else round(mu * 1000, 1))
-                for lo, hi, mu, n in zip(st.bin_lo, st.bin_hi, st["mean"], st["n"])}
-        summary["trans_err_vs_range_mm"] = trans_err_summary
-        M.binned_stats(perr, "trans_err_m", "range_m", RANGE_BINS).to_csv(
-            "results/trans_err_vs_range.csv", index=False)
-    ax.set_xlabel("range (m; series dodged +/-0.03-0.09 m for legibility)")
-    ax.set_ylabel("translation vs board reference (mm, error bars: +/-1 std)")
-    ax.legend()
-    ax.set_title("Single-marker vs board reference (self-consistency, NOT accuracy)")
+        dropped = st[(st.n > 0) & (st.n < MIN_TRIALS_PER_BIN)]
+        for row in dropped.itertuples():
+            summary["suppressed_bins"].append({
+                "figure": "trans_err_vs_range",
+                "bin_lo_m": float(row.bin_lo), "bin_hi_m": float(row.bin_hi),
+                "n": int(row.n)})
+        valid = (st.n >= MIN_TRIALS_PER_BIN).to_numpy()
+        centre = ((st.bin_lo + st.bin_hi) / 2).to_numpy()
+        ax.errorbar(centre[valid], st["mean"].to_numpy()[valid] * 1000,
+                    yerr=st["std"].to_numpy()[valid] * 1000,
+                    marker="o", color=vizstyle.SIZE_COLORS[149.4], capsize=3)
+        summary["trans_err_vs_range_mm"] = {
+            f"{lo}-{hi}": (None if (np.isnan(mu) or n < MIN_TRIALS_PER_BIN)
+                           else round(mu * 1000, 1))
+            for lo, hi, mu, n in zip(st.bin_lo, st.bin_hi, st["mean"], st["n"])}
+        st.to_csv("results/trans_err_vs_range.csv", index=False)
+    ax.set_xlabel("range (m)")
+    ax.set_ylabel("translation vs board reference (mm)")
+    ax.set_title("Single-marker vs board reference (self-consistency, NOT accuracy)\n"
+                 "pooled across marker sizes -- error bars: +/-1 std")
     fig.tight_layout()
     vizstyle.save(fig, "trans_err_vs_range")
 
@@ -432,12 +424,18 @@ def main(dataset_dir):
          if rate_suppressed else "none") + ".",
         f"- {len(pose_suppressed)} bin(s) with fewer than "
         f"{MIN_TRIALS_PER_BIN} trials were suppressed from the pose-error-vs-range "
-        "figure (n=1-2 bins were single-sample artifacts, e.g. one giving a std of NaN "
-        "with no error bar); the full per-bin table, including these, is still in "
-        "`trans_err_vs_range.csv`. Suppressed: " +
-        ("; ".join(f"{b['group_mm']:.0f} mm, {b['bin_lo_m']:.1f}-{b['bin_hi_m']:.1f} m, "
-                   f"n={b['n']}" for b in pose_suppressed)
+        "figure (pooled across marker sizes; n=1-3 bins were near-empty and would carry "
+        "a std of NaN or an unrepresentative one); the full per-bin table, including "
+        "these, is still in `trans_err_vs_range.csv`. Suppressed: " +
+        ("; ".join(f"{b['bin_lo_m']:.1f}-{b['bin_hi_m']:.1f} m, n={b['n']}"
+                   for b in pose_suppressed)
          if pose_suppressed else "none") + ".",
+        "- The pose-error-vs-range figure is pooled across marker sizes, not broken down "
+        "per size: the leave-one-out board reference used by `pose_error_vs_reference` "
+        "gets weaker when 201/202 are the marker under test (only the narrow centre "
+        "cluster remains as reference) and stronger when a small marker is under test "
+        "(201+202, 427 mm apart, remain) -- a per-size split would measure that reference "
+        "confound, not marker quality, and read backwards (see `analysis/metrics.py`).",
         "",
     ]
     for run, s in summary["runs"].items():
