@@ -12,7 +12,7 @@ Bags are zstd-compressed; decompress first with `zstd -d <bag>.mcap.zstd`.
 
 **Stages 1-6 (this image)** read only `dataset/` and never import ROS:
 
-    docker build -f analysis/Dockerfile -t uwaruco-analysis .
+    docker build -t uwaruco-analysis .
     docker run --rm -v "$PWD":/work \
       uwaruco-analysis python analysis/run_analysis.py dataset/
 
@@ -48,5 +48,10 @@ The devcontainer covers the analysis only. Stage 0 still runs in the ROS contain
 
 OpenCV rewrote the ArUco module in 4.7. The ROS 2 Jazzy container ships cv2 4.6
 (legacy API: no `ArucoDetector`, no `generateImageMarker`). Detection results are not
-comparable across that boundary, so this image pins 4.10 and `analysis/tests/test_env.py`
-enforces the floor.
+comparable across that boundary, so the root `requirements.txt` pins 4.10.
+
+`analysis/tests/test_env.py` asserts the running cv2 IS that pin, not merely that it
+clears a floor. A floor cannot catch upward drift, and upward drift is what actually
+happened once: a second pip install pulled an unpinned `opencv-contrib-python` 5.0.0
+that shadowed the pinned headless 4.10, and the floor check passed it. One pinned
+requirements file at the root now makes that unrepresentable.

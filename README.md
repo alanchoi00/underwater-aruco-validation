@@ -12,7 +12,7 @@ perception package.
 ## 1. Make the target
 
 ```bash
-pip install -r target/requirements.txt
+pip install -r requirements.txt
 python3 target/aruco_collage_a4.py
 ```
 
@@ -45,7 +45,7 @@ Needs `ros2 bag` from your ROS 2 install, not pip.
 Two environments, on purpose. See `analysis/README.md`.
 
 ```bash
-docker build -f analysis/Dockerfile -t uwaruco-analysis .
+docker build -t uwaruco-analysis .
 docker run --rm -v "$PWD":/work uwaruco-analysis python analysis/run_analysis.py dataset/
 ```
 
@@ -57,7 +57,7 @@ docker run --rm -v "$PWD":/work uwaruco-analysis python -m pytest -q
 ```
 
 To work on the analysis, open the repo in the devcontainer ("Reopen in Container"). It
-builds from the same `analysis/Dockerfile`, so the editor resolves against the versions
+builds from the same root `Dockerfile`, so the editor resolves against the versions
 the code actually runs on. Without it your host Python is 3.10 with cv2 4.5.4, where
 `cv2.aruco.ArucoDetector` does not exist, and the editor will mark correct code broken
 while accepting the 4.6 API the pin exists to avoid.
