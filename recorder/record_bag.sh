@@ -1,9 +1,8 @@
 #!/bin/bash
 # record_bag.sh -- rosbag capture for underwater ArUco runs.
 #
-# Records to MCAP with file-level zstd compression. Simpler alternative to
-# recorder/run_recorder.py: no run sequencing, no live ArUco cross-check -- just a
-# clean bag. Use this when an operator is driving the runs by hand.
+# Records to MCAP with file-level zstd compression. No run sequencing, no live
+# cross-check -- just a clean bag while an operator drives the runs by hand.
 #
 #   ./record_bag.sh alan-3          -> $DATASET_DIR/alan-3
 #   ./record_bag.sh                 -> $DATASET_DIR/bag_<timestamp>
