@@ -229,7 +229,7 @@ def main(dataset_dir):
         color = vizstyle.SIZE_COLORS.get(size_mm, vizstyle.TEXT_PRIMARY)
         marker = vizstyle.SIZE_MARKERS.get(size_mm, "o")
         for i, mid in enumerate(sorted(mids, key=lambda m: mr[m])):
-            ax.scatter(size_mm, mr[mid], color=color, marker=marker, zorder=3,
+            ax.scatter(size_mm, mr[mid], color=color, marker=marker, s=14, zorder=3,
                        label=f"{size_mm:.0f} mm" if i == 0 else None)
     xs = np.linspace(0, sizes.max() * 1100, 50)
     ax.plot(xs, k * xs / 1000, ls="--", c=vizstyle.TEXT_SECONDARY, lw=1,
@@ -357,10 +357,10 @@ def main(dataset_dir):
     fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 3.8))
     if pts:
         ts, rs = zip(*pts)
-        ax.plot(ts, rs, marker="o", ms=3, lw=1, color=vizstyle.SIZE_COLORS[149.4],
+        ax.plot(ts, rs, marker="o", ms=1.6, lw=1, color=vizstyle.SIZE_COLORS[149.4],
                 zorder=3)
         last_t, last_r = ts[-1], rs[-1]
-        ax.scatter([last_t], [last_r], color="tab:red", marker="X", s=60, zorder=4,
+        ax.scatter([last_t], [last_r], color="tab:red", marker="X", s=22, zorder=4,
                    label=f"last detection: t={last_t:.0f}s, {last_r:.2f} m")
         ax.axvspan(last_t, bag_end_s, color=vizstyle.GHOST_COLOR, alpha=0.35, zorder=1)
         ax.text((last_t + bag_end_s) / 2, last_r * 0.55,

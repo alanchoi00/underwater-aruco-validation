@@ -50,7 +50,9 @@ def apply():
         "axes.spines.top": False,
         "axes.spines.right": False,
         "lines.linewidth": 1.8,
-        "lines.markersize": 5,
+        # Small: the curve carries the trend, the marker only pins where a bin sits.
+        # Oversized markers hide the line and collide once several series overlap.
+        "lines.markersize": 3,
         "figure.dpi": 150,
         "savefig.dpi": 300,
         "savefig.bbox": "tight",
