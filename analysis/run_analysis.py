@@ -76,6 +76,8 @@ def main(dataset_dir):
                "code_version": code_version(), "runs": {}}
     lay = L.load_layout("config/board_layout.yaml")
     trials_by_run = {}
+    rng_by_run = {}
+    inc_by_run = {}
 
     for run in ("test1", "test2"):
         det, frames, imu, ci = load_run(dataset_dir, run)
@@ -101,6 +103,8 @@ def main(dataset_dir):
             rng[int(fi)] = M.range_from_apparent_px(
                 big.apparent_px, int(big.marker_id), ci["fx"])
 
+        rng_by_run[run] = rng
+
         rates = M.detection_rate_by_px_bin(det, {m: n_frames for m in g.SIZES}, PX_BINS)
         rates.to_csv(f"results/{run}_detection_rate_by_px.csv", index=False)
         summary["runs"][run]["max_range_m"] = M.furthest_detection_range(det, rng)
@@ -120,6 +124,7 @@ def main(dataset_dir):
             if ok:
                 inc.append(M.incidence_angle_deg(rvec.ravel()))
         inc = np.array(inc)
+        inc_by_run[run] = inc
         summary["runs"][run]["incidence_deg"] = {
             "median": round(float(np.median(inc)), 1) if len(inc) else None,
             "p10": round(float(np.percentile(inc, 10)), 1) if len(inc) else None,
@@ -306,6 +311,94 @@ def main(dataset_dir):
     fig.tight_layout()
     vizstyle.save(fig, "trans_err_vs_range")
 
+    # Figure 5: rotation error vs range. Exact sibling of figure 4 above -- same
+    # pooling rationale (the leave-one-out reference confound in pose_error_vs_reference
+    # is identical for rotation and translation), same range bins, same suppression, same
+    # honesty about self-consistency vs the board reference. rot_err_deg was computed by
+    # pose_error_vs_reference() above (perr) and, until now, plotted nowhere -- yet it is
+    # the one pose metric that maps onto the docking FSM's heading_tol_rad.
+    fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 4.0))
+    if len(perr):
+        strot = M.binned_stats(perr, "rot_err_deg", "range_m", RANGE_BINS)
+        dropped_rot = strot[(strot.n > 0) & (strot.n < MIN_TRIALS_PER_BIN)]
+        for row in dropped_rot.itertuples():
+            summary["suppressed_bins"].append({
+                "figure": "rot_err_vs_range",
+                "bin_lo_m": float(row.bin_lo), "bin_hi_m": float(row.bin_hi),
+                "n": int(row.n)})
+        valid_rot = (strot.n >= MIN_TRIALS_PER_BIN).to_numpy()
+        centre_rot = ((strot.bin_lo + strot.bin_hi) / 2).to_numpy()
+        ax.errorbar(centre_rot[valid_rot], strot["mean"].to_numpy()[valid_rot],
+                    yerr=strot["std"].to_numpy()[valid_rot],
+                    marker="o", color=vizstyle.SIZE_COLORS[149.4], capsize=3)
+        summary["rot_err_vs_range_deg"] = {
+            f"{lo}-{hi}": (None if (np.isnan(mu) or n < MIN_TRIALS_PER_BIN)
+                           else round(mu, 1))
+            for lo, hi, mu, n in zip(strot.bin_lo, strot.bin_hi, strot["mean"], strot["n"])}
+        strot.to_csv("results/rot_err_vs_range.csv", index=False)
+    ax.set_xlabel("range (m)")
+    ax.set_ylabel("rotation vs board reference (deg)")
+    ax.set_title("Single-marker vs board reference (self-consistency, NOT accuracy)\n"
+                 "pooled across marker sizes -- error bars: +/-1 std")
+    fig.tight_layout()
+    vizstyle.save(fig, "rot_err_vs_range")
+
+    # Figure 6: range vs time for test1 (spec 3.1b). Detections die at ~191 s / ~4.9 m,
+    # but the IMU (which spans the whole run, unlike the camera coverage) shows the bag
+    # running to ~270 s -- i.e. the operator kept walking for ~79 s / ~3 m with ZERO
+    # detections. That is what makes the max-range figure a real physical limit rather
+    # than an artifact of the walk ending, and until now it was prose-only (spec 3.1b).
+    imu1_full = pd.read_csv(os.path.join(dataset_dir, "test1", "imu.csv"))
+    t0 = min(frames1["stamp"].min(), imu1_full["stamp"].min())
+    frame_stamp1 = dict(zip(frames1["frame_idx"], frames1["stamp"]))
+    pts = sorted((frame_stamp1[fi] - t0, r) for fi, r in rng_by_run["test1"].items()
+                 if fi in frame_stamp1)
+    bag_end_s = float(imu1_full["stamp"].max() - t0)
+    fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 3.8))
+    if pts:
+        ts, rs = zip(*pts)
+        ax.plot(ts, rs, marker="o", ms=3, lw=1, color=vizstyle.SIZE_COLORS[149.4],
+                zorder=3)
+        last_t, last_r = ts[-1], rs[-1]
+        ax.scatter([last_t], [last_r], color="tab:red", marker="X", s=60, zorder=4,
+                   label=f"last detection: t={last_t:.0f}s, {last_r:.2f} m")
+        ax.axvspan(last_t, bag_end_s, color=vizstyle.GHOST_COLOR, alpha=0.35, zorder=1)
+        ax.text((last_t + bag_end_s) / 2, last_r * 0.55,
+                "no detections -- walk continued\noperator continued to ~8 m (inferred)",
+                ha="center", va="top", fontsize=7.5, color=vizstyle.TEXT_SECONDARY)
+        ax.legend(loc="upper left")
+    ax.set_xlabel("time since run start (s)")
+    ax.set_ylabel("range (m, derived: +/-10%)")
+    ax.set_title("Walk-back profile: detection ends at ~4.9 m, ~3 m before the walk does")
+    fig.tight_layout()
+    vizstyle.save(fig, "range_vs_time")
+
+    # Figure 7: incidence-angle histogram (spec 3.1c / limitation 10). Two disconnected
+    # viewing-angle regimes -- test1 near head-on, test2 oblique -- with an empty
+    # 20-45 deg band between them. This is why NO detection-rate-vs-angle curve is
+    # reported anywhere in this pipeline: there is no controlled angle sweep, and angle
+    # is confounded with range and marker size (incidence is itself a PnP output).
+    fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 3.8))
+    bins = np.arange(0, 91, 5)
+    run_colors = {"test1": vizstyle.SIZE_COLORS[149.4], "test2": vizstyle.SIZE_COLORS[35.6]}
+    for run in ("test1", "test2"):
+        inc = inc_by_run.get(run, np.array([]))
+        if len(inc):
+            ax.hist(inc, bins=bins, color=run_colors[run], alpha=0.55,
+                    label=f"{run} (median {np.median(inc):.0f} deg, n={len(inc)})",
+                    edgecolor="white", linewidth=0.5)
+    ax.axvspan(20, 45, color=vizstyle.GHOST_COLOR, alpha=0.3, zorder=0)
+    ymax = ax.get_ylim()[1]
+    ax.text(32.5, ymax * 0.9, "no controlled\nsweep here",
+            ha="center", va="top", fontsize=7.5, color=vizstyle.TEXT_SECONDARY)
+    ax.set_xlabel("incidence angle (deg, 0 = head-on)")
+    ax.set_ylabel("detections")
+    ax.set_title("Incidence angle: two disconnected regimes, not a swept curve\n"
+                 "angle is confounded with range/size -- no detection-vs-angle curve is reported")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    vizstyle.save(fig, "incidence_angle_hist")
+
     # Stage 4: IMU validation -- the only camera-INDEPENDENT check (spec 4).
     # (a) Gravity: the board does not move relative to gravity, so the angle between the
     #     PnP board-normal and the IMU gravity vector must be STABLE across a run. Its
@@ -413,6 +506,8 @@ def main(dataset_dir):
                         if b["figure"] == "detection_rate"]
     pose_suppressed = [b for b in summary["suppressed_bins"]
                        if b["figure"] == "trans_err_vs_range"]
+    rot_suppressed = [b for b in summary["suppressed_bins"]
+                      if b["figure"] == "rot_err_vs_range"]
     lines += [
         f"- {len(rate_suppressed)} bin(s) with fewer than "
         f"{MIN_TRIALS_PER_BIN} trials were suppressed from the detection-rate figures "
@@ -430,6 +525,14 @@ def main(dataset_dir):
         ("; ".join(f"{b['bin_lo_m']:.1f}-{b['bin_hi_m']:.1f} m, n={b['n']}"
                    for b in pose_suppressed)
          if pose_suppressed else "none") + ".",
+        f"- {len(rot_suppressed)} bin(s) with fewer than "
+        f"{MIN_TRIALS_PER_BIN} trials were suppressed from the rotation-error-vs-range "
+        "figure (same pooling and suppression as the translation-error figure above); "
+        "the full per-bin table, including these, is still in `rot_err_vs_range.csv`. "
+        "Suppressed: " +
+        ("; ".join(f"{b['bin_lo_m']:.1f}-{b['bin_hi_m']:.1f} m, n={b['n']}"
+                   for b in rot_suppressed)
+         if rot_suppressed else "none") + ".",
         "- The pose-error-vs-range figure is pooled across marker sizes, not broken down "
         "per size: the leave-one-out board reference used by `pose_error_vs_reference` "
         "gets weaker when 201/202 are the marker under test (only the narrow centre "
