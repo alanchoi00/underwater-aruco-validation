@@ -21,6 +21,10 @@ from analysis import segment, vizstyle
 
 PX_BINS = [8, 12, 16, 21, 28, 38, 52, 72, 100, 140, 200, 300]
 
+# Break the walk-back trace when detection lapses longer than this. One frame is 0.4 s
+# at 2.5 Hz, so this trips on a real dropout rather than on ordinary frame spacing.
+DROPOUT_GAP_S = 1.0
+
 # A bin with one or two trials carries no information but its Wilson CI spans most of
 # the axis, so it dominates the figure. Suppress below this, and log what was dropped --
 # a silently truncated plot reads as "we measured everywhere" when we did not.
@@ -357,8 +361,23 @@ def main(dataset_dir):
     fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, 3.8))
     if pts:
         ts, rs = zip(*pts)
-        ax.plot(ts, rs, marker="o", ms=1.6, lw=1, color=vizstyle.SIZE_COLORS[149.4],
-                zorder=3)
+        # No markers: 323 points across the axis is ~58 per inch, so any marker large
+        # enough to see overlaps its neighbours -- the data is denser than the ink.
+        # But do NOT draw one continuous line either: 30% of frames have no board pose
+        # (the yaw turns swing the board out of frame; the largest hole is 12 s), and a
+        # solid line would interpolate a confident trajectory straight through them.
+        # Break the line wherever detection actually lapsed, so the gaps read as gaps.
+        ta, ra = np.asarray(ts, float), np.asarray(rs, float)
+        brk = np.where(np.diff(ta) > DROPOUT_GAP_S)[0] + 1
+        ax.plot(np.insert(ta, brk, np.nan), np.insert(ra, brk, np.nan),
+                lw=1.2, color=vizstyle.SIZE_COLORS[149.4], zorder=3,
+                label=f"detected ({len(brk)} breaks = board lost, mostly yaw turns)")
+        # A segment of one frame draws no line, so a lone detection between two dropouts
+        # would silently vanish -- including this run's very first one. Dot those in.
+        lone = [seg[0] for seg in np.split(np.arange(len(ta)), brk) if len(seg) == 1]
+        if lone:
+            ax.scatter(ta[lone], ra[lone], s=4, color=vizstyle.SIZE_COLORS[149.4],
+                       zorder=3)
         last_t, last_r = ts[-1], rs[-1]
         ax.scatter([last_t], [last_r], color="tab:red", marker="X", s=22, zorder=4,
                    label=f"last detection: t={last_t:.0f}s, {last_r:.2f} m")
