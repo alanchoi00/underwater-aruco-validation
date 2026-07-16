@@ -399,8 +399,7 @@ def main(dataset_dir):
         ta, ra = np.asarray(ts, float), np.asarray(rs, float)
         brk = np.where(np.diff(ta) > DROPOUT_GAP_S)[0] + 1
         ax.plot(np.insert(ta, brk, np.nan), np.insert(ra, brk, np.nan),
-                lw=1.2, color=vizstyle.SIZE_COLORS[149.4], zorder=3,
-                label=f"detected ({len(brk)} breaks = board lost, mostly yaw turns)")
+                lw=1.2, color=vizstyle.SIZE_COLORS[149.4], zorder=3)
         # A segment of one frame draws no line, so a lone detection between two dropouts
         # would silently vanish -- including this run's very first one. Dot those in.
         lone = [seg[0] for seg in np.split(np.arange(len(ta)), brk) if len(seg) == 1]
@@ -408,13 +407,21 @@ def main(dataset_dir):
             ax.scatter(ta[lone], ra[lone], s=4, color=vizstyle.SIZE_COLORS[149.4],
                        zorder=3)
         last_t, last_r = ts[-1], rs[-1]
-        ax.scatter([last_t], [last_r], color="tab:red", marker="X", s=22, zorder=4,
-                   label=f"last detection: t={last_t:.0f}s, {last_r:.2f} m")
+        ax.scatter([last_t], [last_r], color="tab:red", marker="X", s=22, zorder=4)
         ax.axvspan(last_t, bag_end_s, color=vizstyle.GHOST_COLOR, alpha=0.35, zorder=1)
         ax.text((last_t + bag_end_s) / 2, last_r * 0.55,
                 "no detections, walk continued.\noperator continued to ~8 m (inferred)",
                 ha="center", va="top", fontsize=7.5, color=vizstyle.TEXT_SECONDARY)
-        ax.legend(loc="upper left")
+        # Direct labels, no legend box. The trace runs bottom-left to top-right, so a
+        # legend wide enough for this text spans the axis and collides with the line's
+        # top-right end wherever it is anchored. Put each label in the empty region
+        # nearest what it describes instead.
+        ax.text(0.015, 0.97, f"trace breaks {len(brk)}x: board lost during yaw turns",
+                transform=ax.transAxes, ha="left", va="top", fontsize=7.5,
+                color=vizstyle.TEXT_SECONDARY)
+        ax.annotate(f"last detection\n{last_r:.2f} m at t={last_t:.0f} s",
+                    xy=(last_t, last_r), xytext=(last_t + 6, last_r - 0.05),
+                    ha="left", va="top", fontsize=7.5, color="tab:red")
     ax.set_xlabel("time since run start (s)")
     ax.set_ylabel("range to board centroid (m, +/-10%)")
     # Derive the headline from the data. Hardcoding it went stale the moment the range
