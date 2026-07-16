@@ -340,7 +340,7 @@ def main(dataset_dir):
     ax.set_xlabel("range (m)")
     ax.set_ylabel("translation vs board reference (mm)")
     ax.set_title("Single-marker vs board reference (self-consistency, NOT accuracy)\n"
-                 "pooled across marker sizes -- error bars: +/-1 std")
+                 "pooled across marker sizes; error bars are +/-1 std")
     fig.tight_layout()
     vizstyle.save(fig, "trans_err_vs_range")
 
@@ -372,7 +372,7 @@ def main(dataset_dir):
     ax.set_xlabel("range (m)")
     ax.set_ylabel("rotation vs board reference (deg)")
     ax.set_title("Single-marker vs board reference (self-consistency, NOT accuracy)\n"
-                 "pooled across marker sizes -- error bars: +/-1 std")
+                 "pooled across marker sizes; error bars are +/-1 std")
     fig.tight_layout()
     vizstyle.save(fig, "rot_err_vs_range")
 
@@ -412,12 +412,16 @@ def main(dataset_dir):
                    label=f"last detection: t={last_t:.0f}s, {last_r:.2f} m")
         ax.axvspan(last_t, bag_end_s, color=vizstyle.GHOST_COLOR, alpha=0.35, zorder=1)
         ax.text((last_t + bag_end_s) / 2, last_r * 0.55,
-                "no detections -- walk continued\noperator continued to ~8 m (inferred)",
+                "no detections, walk continued.\noperator continued to ~8 m (inferred)",
                 ha="center", va="top", fontsize=7.5, color=vizstyle.TEXT_SECONDARY)
         ax.legend(loc="upper left")
     ax.set_xlabel("time since run start (s)")
     ax.set_ylabel("range to board centroid (m, +/-10%)")
-    ax.set_title("Walk-back profile: detection ends at ~4.9 m, ~3 m before the walk does")
+    # Derive the headline from the data. Hardcoding it went stale the moment the range
+    # estimator changed from apparent size to the board pose (4.9 m became 5.11 m).
+    if pts:
+        ax.set_title(f"Walk-back profile: detection ends at ~{last_r:.1f} m, "
+                     f"{bag_end_s - last_t:.0f} s before the walk does")
     fig.tight_layout()
     vizstyle.save(fig, "range_vs_time")
 
@@ -581,7 +585,7 @@ def main(dataset_dir):
         "per size: the leave-one-out board reference used by `pose_error_vs_reference` "
         "gets weaker when 201/202 are the marker under test (only the narrow centre "
         "cluster remains as reference) and stronger when a small marker is under test "
-        "(201+202, 427 mm apart, remain) -- a per-size split would measure that reference "
+        "(201+202, 427 mm apart, remain). A per-size split would measure that reference "
         "confound, not marker quality, and read backwards (see `analysis/metrics.py`).",
         "",
     ]
@@ -602,7 +606,7 @@ def main(dataset_dir):
         lines.append("")
 
     gchk, ychk = summary["imu_gravity_check"], summary["imu_yaw_check"]
-    lines += ["## Stage 4 - IMU validation (camera-independent)", "",
+    lines += ["## Stage 4: IMU validation (camera-independent)", "",
               f"- Gravity check PASSES: board tilt from vertical over {gchk['n_frames']} "
               f"frames = {gchk['board_tilt_from_vertical_deg_median']} deg median, std "
               f"{gchk['std_deg']} deg (low std = PnP attitude consistent with the "
@@ -634,7 +638,7 @@ def main(dataset_dir):
             lines.append(
                 "  Even restricted to these full-coverage segments, vision's "
                 "magnitude does not consistently track the gyro's (see per-segment "
-                "numbers below) -- the yaw check does not corroborate the gravity "
+                "numbers below), so the yaw check does not corroborate the gravity "
                 "check on this dataset. The gravity check above remains the sole "
                 "camera-independent validation; the yaw numbers are reported for "
                 "completeness, not as a passing check.")
