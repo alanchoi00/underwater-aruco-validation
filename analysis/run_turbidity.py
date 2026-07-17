@@ -65,22 +65,39 @@ def collect_samples(dataset_dir, det, poses, lay):
     return pd.DataFrame(rows)
 
 
-def figure_beta(samples, betas):
+def figure_beta(samples, responses):
+    """Plot the authoritative fixed-effects, instrument-corrected beta fit.
+
+    measure_beta's pooled fit is NOT plotted here: it is superseded (about 19% biased
+    high, and it conflates each marker's own intercept with the shared slope), and an
+    earlier version of this figure plotted it anyway, so the figure contradicted the
+    beta table it sits next to. Both the scatter and the curve below are
+    instrument-corrected (divided by k(apparent_px)) and fit with
+    fit_beta_fixed_effects, the same call that produces beta_fixed_effects in
+    turbidity_summary.json, so the numbers in the legend match that table exactly.
+    The plotted intercept is the median of the per-marker intercepts from that fit,
+    since fixed effects gives one per marker id and this figure draws one line.
+    """
     fig, ax = plt.subplots(figsize=(vizstyle.COL_W, vizstyle.COL_W * 0.75))
     colours = {"b": "#2a78d6", "g": "#2e8b57", "r": "#c0392b", "grey": "#52514e"}
     for ch in T.CHANNELS:
-        c = samples[f"white_{ch}"] - samples[f"black_{ch}"]
-        ok = c > 0
-        ax.scatter(samples.range_m[ok], c[ok], s=4, alpha=0.25, color=colours[ch],
+        sub = samples.dropna(subset=[f"white_{ch}", f"black_{ch}", "range_m",
+                                     "apparent_px", "marker_id"])
+        k_px, k_val = responses[ch]
+        resp = T.apply_instrument_response(sub["apparent_px"].to_numpy(), k_px, k_val)
+        contrast = (sub[f"white_{ch}"] - sub[f"black_{ch}"]).to_numpy() / resp
+        ok = contrast > 0
+        ax.scatter(sub.range_m[ok], contrast[ok], s=4, alpha=0.25, color=colours[ch],
                    linewidths=0)
-        row = betas[betas.channel == ch].iloc[0]
-        d = np.linspace(samples.range_m.min(), samples.range_m.max(), 50)
-        ax.plot(d, row.c0 * np.exp(-row.beta * d), color=colours[ch], lw=2,
-                label=f"{ch}: beta={row.beta:.3f}/m, r2={row.r2:.2f}")
+        beta, r2, intercepts = T.fit_beta_fixed_effects(sub, ch, k=responses[ch])
+        c0 = float(np.median(list(intercepts.values()))) if intercepts else float("nan")
+        d = np.linspace(sub.range_m.min(), sub.range_m.max(), 50)
+        ax.plot(d, c0 * np.exp(-beta * d), color=colours[ch], lw=2,
+                label=f"{ch}: beta={beta:.3f}/m, r2={r2:.2f}")
     ax.set_yscale("log")
     ax.set_xlabel("range (m, from board pose)")
-    ax.set_ylabel("black/white contrast (DN)")
-    ax.set_title("Contrast decay: the water measuring itself")
+    ax.set_ylabel("instrument-corrected black/white contrast (DN)")
+    ax.set_title("Contrast decay: fixed-effects fit, instrument-corrected")
     ax.legend(fontsize=6, loc="lower left")
     vizstyle.save(fig, "beta_contrast_decay")
 
@@ -635,7 +652,7 @@ def main(dataset_dir="dataset"):
                             for r in veil.itertuples()}
     summary["tau_at_5m_grey"] = round(float(beta_map["grey"] * 5.0), 2)
 
-    figure_beta(samples, betas)
+    figure_beta(samples, responses)
     samples[["frame_idx", "marker_id", "size_mm", "range_m", "apparent_px",
              "edge_px"]].to_csv("results/turbidity_edge_width.csv", index=False)
     figure_edge_width(samples, beta_map["grey"], summary)
