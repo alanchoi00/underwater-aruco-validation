@@ -327,6 +327,27 @@ def test_synthesise_treats_nan_depth_as_off_plane():
     assert np.array_equal(out[:, :30], img[:, :30])
 
 
+def test_synthesise_scales_each_channel_by_its_own_dbeta():
+    """Distinct per-channel dbeta must scale each channel by its own factor.
+
+    All the tests above use dbeta=0 or a single value shared across channels, so a
+    mutant that reverses the channel order of both B and dbeta (a BGR/RGB mixup)
+    passes every one of them. Here B and dbeta are both distinct per channel, and
+    each channel's contrast is checked against its own exp(-dbeta[c]*d), which a
+    channel-order bug cannot satisfy.
+    """
+    img, depth, mask = _flat_scene(depth_m=2.0)
+    img[0, 0] = [200, 100, 50]
+    img[0, 1] = [40, 20, 10]
+    B = np.array([150.0, 90.0, 70.0])
+    dbeta = np.array([0.6, 0.3, 0.1])
+    out = T.synthesise(img, depth, mask, B=B, dbeta=dbeta)
+    before = img[0, 0].astype(float) - img[0, 1].astype(float)
+    after = out[0, 0].astype(float) - out[0, 1].astype(float)
+    expected = before * np.exp(-dbeta * 2.0)
+    assert np.allclose(after, expected, atol=1.0)
+
+
 def test_synthesise_moves_pixels_toward_B_as_turbidity_grows():
     img, depth, mask = _flat_scene(depth_m=3.0)
     img[:] = 20

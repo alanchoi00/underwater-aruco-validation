@@ -207,11 +207,21 @@ def synthesise(img, depth, mask, B, dbeta):
 
         I_new = B + (I_obs - B) * exp(-dbeta * d(x))
 
-    This is the simplified image formation model rearranged so that nothing is divided
-    by exp(-beta*d). Recovering J first (the textbook route) would divide by 0.204 in red
-    at 3 m, amplifying the error in the badly fitted B fivefold, worst exactly where
-    turbidity matters. Here B only sets the DC level, which ArUco's adaptive threshold
-    largely rejects, while the contrast term is exact and B-free.
+    This is the simplified image formation model with J eliminated. It is algebraically
+    identical to recovering J = (I - B*(1-T))/T with T = exp(-beta*d) and then
+    re-attenuating with beta+dbeta, but it never forms J explicitly.
+
+    That matters because the recovered J is not representable: at beta = 0.53 (red) and
+    d = 3 m, exp(-beta*d) = 0.204, and J on real pixel values ranges roughly -600 to
+    +520. Any pipeline that stores that intermediate as an image clips it and destroys
+    the signal. This form's output always lies between I_obs and B, so it cannot leave
+    range. It also never needs beta itself, only the dbeta being added.
+
+    B's poor fit (r^2 ~ 0.5) does not sink the method: B cancels exactly from the
+    difference of any two pixels at the same range, so contrast scales by exactly
+    exp(-dbeta*d) and B only sets the DC level, which ArUco's adaptive threshold
+    largely rejects. That is a property of the model itself, not an advantage of this
+    formulation over recovering J and re-attenuating; the two are the same function.
 
     Pixels outside mask, or whose depth is nan, are returned untouched.
     """
@@ -220,8 +230,7 @@ def synthesise(img, depth, mask, B, dbeta):
     Bv = np.asarray(B, dtype=np.float64).reshape(1, 1, 3)
     db = np.asarray(dbeta, dtype=np.float64).reshape(1, 1, 3)
 
-    with np.errstate(invalid="ignore"):
-        trans = np.exp(-db * np.nan_to_num(d, nan=0.0)[..., None])
+    trans = np.exp(-db * np.nan_to_num(d, nan=0.0)[..., None])
     new = Bv + (src - Bv) * trans
 
     apply = np.asarray(mask, dtype=bool) & np.isfinite(d)
