@@ -313,12 +313,6 @@ def sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map, B_map, summary):
     return pred, pd.concat(out, ignore_index=True), pd.concat(trial_rows, ignore_index=True)
 
 
-# Log-spaced edges covering the observed tau_total range (about 0.18 at multiplier 0,
-# short range, up to about 9 at multiplier 8, long range). Non-uniform, same as the old
-# per-multiplier axis was; pcolormesh handles irregular coordinates directly.
-TAU_BINS = [0.1, 0.15, 0.22, 0.32, 0.46, 0.68, 1.0, 1.5, 2.2, 3.2, 4.6, 6.8, 10.0]
-
-
 def figure_surface(trials_df, summary):
     """rate(px, tau_total), tau_total = (1 + multiplier) * beta_grey * range_m from the
     board pose. The parent study's sigmoid is ONE DIAGONAL SLICE through this: in real
@@ -376,6 +370,10 @@ def figure_surface(trials_df, summary):
     vizstyle.save(fig, "rate_px_tau_surface")
 
 
+# Linear edges covering the observed tau_total range (about 0.18 at multiplier 0, short
+# range, up to about 9 at multiplier 8, long range), with a wide last bin to catch the
+# collapsed-detection tail out to tau 14. Shared by figure_surface and
+# figure_px_required, both binning the same tau_total column.
 TAU_BINS = [0.0, 0.35, 0.55, 0.8, 1.1, 1.5, 2.0, 2.6, 3.4, 4.5, 6.0, 14.0]
 BETA_SCENARIOS = {"this pool": None, "clearer (0.15/m)": 0.15,
                   "murkier (0.60/m)": 0.60, "harbour (1.00/m)": 1.00}
