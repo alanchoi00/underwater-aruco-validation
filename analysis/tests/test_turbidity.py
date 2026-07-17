@@ -366,6 +366,49 @@ def _blurred_square(sigma, side=120, canvas=240, black=30, white=220):
     return img, corners
 
 
+def _asymmetric_edge_fixture(canvas=240, side=48, black=30.0, white=220.0, patch=170.0,
+                             patch_inset=4, patch_width=2):
+    """A black square with a lighter ring a few pixels inward of every edge, mimicking a
+    white data cell just past a real marker's black border, while the region right
+    outside the square stays clean white sheet.
+
+    The symmetric black-square fixtures used elsewhere in this file are direction
+    invariant by construction: abs(t90 - t10) does not care which way the normal points
+    when both sides of the boundary look the same. This fixture breaks that symmetry on
+    purpose, so a broken outward-normal flip changes the result instead of passing
+    unnoticed.
+    """
+    img = np.full((canvas, canvas), white, dtype=np.uint8)
+    off = (canvas - side) // 2
+    img[off:off + side, off:off + side] = black
+    lo, hi = patch_inset, patch_inset + patch_width
+    ring = np.zeros((canvas, canvas), dtype=bool)
+    ring[off + lo:off + side - lo, off + lo:off + side - lo] = True
+    ring[off + hi:off + side - hi, off + hi:off + side - hi] = False
+    img[ring] = patch
+    corners = np.array([[off, off], [off + side, off],
+                        [off + side, off + side], [off, off + side]], dtype=float)
+    return img, corners
+
+
+def test_edge_width_direction_matters_for_an_asymmetric_boundary():
+    """The outward-normal flip is load-bearing: disabling it changes 92.5% of 200 real
+    detections, several by 2 to 4 px against a 4 to 8 px signal, but no prior test could
+    catch it because the only fixture is a symmetric black square.
+
+    Here the inward side carries structure (a ring standing in for a white data cell)
+    and the outward side is clean sheet. A correct outward flip keeps the far (reach_px)
+    reach in the clean sheet and the bounded near reach short of the ring, giving a
+    small, finite width. Flipping the normal the wrong way instead pushes the far reach
+    inward, through the ring and back to black, producing a white-black-white profile
+    that every sample rejects, so edge_width comes back nan instead of a number.
+    """
+    img, corners = _asymmetric_edge_fixture()
+    w = T.edge_width(img, corners)
+    assert np.isfinite(w), w
+    assert w < 3.0, w
+
+
 def test_edge_width_is_small_for_a_sharp_edge():
     img, corners = _blurred_square(sigma=0.0)
     assert T.edge_width(img, corners) < 2.5
