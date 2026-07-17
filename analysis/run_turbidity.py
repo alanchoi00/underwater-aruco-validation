@@ -691,7 +691,7 @@ def main(dataset_dir="dataset"):
     crossval(samples, beta_map, responses, summary)
 
     summary["limitations"] = [
-        "The pool is already in every frame: multiplier 0 is tau about 0.25 to 1.65 by "
+        "The pool is already in every frame: multiplier 0 is tau 0.18 to 1.49 by "
         "range, not clear water. tau_total is the honest axis, not added turbidity.",
         "Veiling B fits at r2 about 0.5. It sets only the DC level, which adaptive "
         "thresholding largely rejects, but at extreme tau contrast approaches "
