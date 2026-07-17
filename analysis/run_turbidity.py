@@ -390,8 +390,24 @@ def figure_px_required(trials, fx, summary):
     different real tau (at 150 px the 149.4 mm marker is at 0.79 m and the 35.6 mm at
     0.19 m, so one cell mixes tau 0.27 to 1.15).
 
-    3(n+2) = 21 px is the tau -> 0 asymptote of this curve, not a constant: the fiducial
-    literature quotes it as though water were air.
+    Three findings, all supported by the measured curve:
+
+    1. The budget is about 27 px, not the textbook 21 px. 3(n+2) = 21 for a 5x5
+       dictionary is a pure sampling argument that assumes air, so it says nothing
+       about contrast; it underestimates by roughly 30 percent here.
+    2. The budget is FLAT from tau 0.18 to 1.30, a 7x range of optical depth.
+       ArUco's adaptive threshold is far more robust to contrast loss than the
+       sampling argument predicts.
+    3. Above tau about 2, detection collapses at every apparent size: the tau 2.0 to
+       2.6 bin tops out at max_rate 0.161, and every bin above tau 2.6 is 0.0. This is
+       a threshold, not a gradient.
+
+    Caution on (1) and (2): PX_BINS near the crossing are [..., 21, 28, 38, ...], so
+    px_at_rate interpolates every one of the tau 0.18 to 1.75 points between bin
+    centres 24.5 and 33.0, an interval only 8.5 px wide. The visible 27.3 to 32.3 px
+    wobble across those points is sub-bin interpolation, not a resolvable trend: do
+    not read it as the budget growing with tau. Only the flatness up to tau 1.30 and
+    the collapse above tau 2 are claims this binning can support.
     """
     t = trials.copy()
     t["tau_bin"] = pd.cut(t.tau_total, TAU_BINS, right=False)
@@ -414,6 +430,17 @@ def figure_px_required(trials, fx, summary):
     curve.to_csv("results/px_required_vs_tau.csv", index=False)
     summary["px_required_vs_tau"] = curve.to_dict("records")
 
+    # Auditable resolution fact for the docstring's caution above: the two PX_BINS
+    # edges that bracket the crossing (21, 28, 38) give bin centres 24.5 and 33.0, an
+    # 8.5 px interval. px_at_rate interpolates linearly inside it, so any px_required
+    # value landing in this range is not resolved finer than its width.
+    lo, mid, hi = 21.0, 28.0, 38.0
+    interval_lo, interval_hi = (lo + mid) / 2.0, (mid + hi) / 2.0
+    summary["px_required_bin_interval"] = {
+        "px_bin_edges": [lo, mid, hi],
+        "interval_px": [interval_lo, interval_hi],
+        "width_px": round(interval_hi - interval_lo, 1)}
+
     ok = curve.dropna(subset=["px_required"])
     fig, ax = plt.subplots(figsize=(vizstyle.COL_W, vizstyle.COL_W * 0.75))
     ax.plot(ok.tau_mid, ok.px_required, "o-", color="#184f95", lw=2, ms=5)
@@ -421,16 +448,37 @@ def figure_px_required(trials, fx, summary):
     ax.annotate("3(n+2) = 21 px, the clear-water budget",
                 xy=(ok.tau_mid.min(), M.pixel_budget_px(5)), xytext=(4, 4),
                 textcoords="offset points", fontsize=6, color=vizstyle.TEXT_SECONDARY)
+
+    # Mark where detection collapses: the first tau bin whose px_required is nan is
+    # the boundary past which no apparent size we measured reaches 50%. The flat curve
+    # to its left simply stops there with no visual cue otherwise, which reads as "the
+    # measurement ran out" rather than "detection died"; make the boundary explicit.
+    # The dead region actually runs to tau 14 (all zero), but drawing the full range
+    # would squeeze the live data into a sliver of the axes, so the view is clipped
+    # just past the first dead bin; the shading still implies it continues past the
+    # visible edge.
+    dead = curve[curve.px_required.isna()]
+    if len(dead):
+        tau_collapse = float(dead.iloc[0].tau_lo)
+        x_right = float(dead.iloc[0].tau_hi) * 1.15
+        ax.axvspan(tau_collapse, float(curve.tau_hi.max()), color="#c0392b", alpha=0.08)
+        ax.axvline(tau_collapse, color="#c0392b", ls=":", lw=1.5)
+        ax.annotate(f"above tau {tau_collapse:.1f}\nno size reaches 50%",
+                    xy=(tau_collapse, ok.px_required.max()),
+                    xytext=(4, -4), textcoords="offset points",
+                    fontsize=6, color="#c0392b", va="top")
+        ax.set_xlim(right=x_right)
+
     ax.set_xlabel("total optical depth, tau (grey)")
     ax.set_ylabel("apparent size at 50% detection (px)")
-    ax.set_title("Pixel budget grows with optical depth")
+    ax.set_title("27 px needed, not 21; fails above tau 2", fontsize=9)
     fig.tight_layout()
     vizstyle.save(fig, "px_required_vs_tau")
 
     # Where the curve reports nan, detection never reached 50% at ANY size we measured.
     # That is a result, not a gap: above roughly tau 2.3 turbidity limits regardless of
-    # apparent size. Record it rather than interpolating through it.
-    dead = curve[curve.px_required.isna()]
+    # apparent size. Record it rather than interpolating through it. `dead` was already
+    # computed above to place the collapse marker on the figure.
     summary["tau_bins_never_reaching_50pc"] = [
         {"tau_lo": r.tau_lo, "tau_hi": r.tau_hi, "n": r.n, "max_rate": round(r.max_rate, 3)}
         for r in dead.itertuples()]
