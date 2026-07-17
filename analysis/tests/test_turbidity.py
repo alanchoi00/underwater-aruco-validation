@@ -297,7 +297,8 @@ def test_synthesise_scales_contrast_by_exactly_exp_minus_delta_tau():
 
 
 def test_synthesise_contrast_is_independent_of_B():
-    """B is known to r^2 ~ 0.5. If contrast depended on it, the design would be unsound.
+    """B's fit is unreliable (r^2 negative on real data). If contrast depended on it,
+    the design would be unsound.
     """
     img, depth, mask = _flat_scene(depth_m=2.0)
     img[0, 0] = [200, 200, 200]

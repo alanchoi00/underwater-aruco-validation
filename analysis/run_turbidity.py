@@ -691,9 +691,10 @@ def main(dataset_dir="dataset"):
     summary["limitations"] = [
         "The pool is already in every frame: multiplier 0 is tau 0.18 to 1.49 by "
         "range, not clear water. tau_total is the honest axis, not added turbidity.",
-        "Veiling B fits at r2 about 0.5. It sets only the DC level, which adaptive "
-        "thresholding largely rejects, but at extreme tau contrast approaches "
-        "quantisation and the model degrades.",
+        "Veiling B fits with r2 negative (-0.57 to -2.72 across channels, from "
+        "veiling_B in this summary), not the r2 about 0.5 once claimed for it. It "
+        "sets only the DC level, which adaptive thresholding largely rejects, but at "
+        "extreme tau contrast approaches quantisation and the model degrades.",
         "Synthesis is not new imagery: the turbidity levels from one frame are "
         "correlated samples, so the Wilson intervals here understate the true "
         "uncertainty across levels.",

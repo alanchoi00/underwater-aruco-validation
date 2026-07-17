@@ -38,8 +38,9 @@ onto the real frames and re-runs the real detector. The deliverable is
 `results/turbidity_sizing.csv`: the marker side needed at a given range and beta.
 
 Reading `results/turbidity_summary.json` first is worthwhile. It carries the fit quality
-(beta at r2 about 0.96, veiling B at about 0.5, which is why the synthesis never inverts
-the model) and the limitations of the method.
+(beta r2 0.705/0.672/0.877/0.746 for b/g/r/grey, veiling B r2 negative, between -0.57 and
+-2.72, which is why the synthesis never inverts the model) and the limitations of the
+method.
 
 The last step, `crossval`, is the check that matters most: everything above tests the
 code against itself (synthetic frames built from the same closed form the code

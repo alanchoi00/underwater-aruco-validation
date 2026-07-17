@@ -10,7 +10,8 @@ so their difference is B-free:
     contrast(d) = (J_white - J_black) * exp(-beta * d)
 
 Taking logs makes beta a straight-line fit that needs no assumption about backscatter.
-That matters, because B itself fits badly (r^2 ~ 0.5) while beta fits well (r^2 ~ 0.96).
+That matters, because B itself fits badly (r^2 negative, between -0.57 and -2.72 across
+channels) while beta fits well (r^2 0.705/0.672/0.877/0.746 for b/g/r/grey).
 """
 import cv2
 import numpy as np
@@ -116,8 +117,9 @@ def fit_veiling(d, black, beta):
     """Fit I_black(d) = B * (1 - exp(-beta * d)) for B, with beta already known.
 
     Linear in B through the origin, so B is a ratio of sums. Reported with its r2 because
-    that r2 is the point: it is around 0.5 on real data, and the design depends on nobody
-    trusting B further than that.
+    that r2 is the point: it is negative on real data (the driver reports B r2 between
+    -0.57 and -2.72 across channels), and the design depends on nobody trusting B
+    further than that.
     """
     d = np.asarray(d, dtype=float)
     y = np.asarray(black, dtype=float)
@@ -311,11 +313,12 @@ def synthesise(img, depth, mask, B, dbeta):
     the signal. This form's output always lies between I_obs and B, so it cannot leave
     range. It also never needs beta itself, only the dbeta being added.
 
-    B's poor fit (r^2 ~ 0.5) does not sink the method: B cancels exactly from the
-    difference of any two pixels at the same range, so contrast scales by exactly
-    exp(-dbeta*d) and B only sets the DC level, which ArUco's adaptive threshold
-    largely rejects. That is a property of the model itself, not an advantage of this
-    formulation over recovering J and re-attenuating; the two are the same function.
+    B's poor fit (r^2 negative, between -0.57 and -2.72 across channels) does not sink
+    the method: B cancels exactly from the difference of any two pixels at the same
+    range, so contrast scales by exactly exp(-dbeta*d) and B only sets the DC level,
+    which ArUco's adaptive threshold largely rejects. That is a property of the model
+    itself, not an advantage of this formulation over recovering J and re-attenuating;
+    the two are the same function.
 
     Pixels outside mask, or whose depth is nan, are returned untouched.
     """
