@@ -512,6 +512,14 @@ def figure_px_required(trials, fx, summary):
         {"tau_lo": r.tau_lo, "tau_hi": r.tau_hi, "n": r.n, "max_rate": round(r.max_rate, 3)}
         for r in dead.itertuples()]
 
+    # side_mm interpolates px_required across the tau 0.18 to 1.75 rise that the
+    # docstring above and the shipped limitations both say is sub-bin interpolation,
+    # not a resolvable trend (every point in it falls inside the single px bin
+    # interval [interval_lo, interval_hi], interval_lo, interval_hi above). A bare
+    # side_mm therefore reads noise as signal. side_mm_lo/side_mm_hi convert that same
+    # bin interval into millimetres at the same range, so the sizing table always
+    # carries its own resolution alongside the point estimate; the point estimate
+    # itself is unchanged, per the project owner's crossing-rule decision.
     sizing = []
     for name, beta in BETA_SCENARIOS.items():
         b = summary["beta_grey_used"] if beta is None else beta
@@ -521,10 +529,14 @@ def figure_px_required(trials, fx, summary):
                 px_req = float("nan")     # outside what was measured; do not invent it
             else:
                 px_req = float(np.interp(tau, ok.tau_mid, ok.px_required))
+            side_lo = T.required_side_m(interval_lo, d, fx) * 1000
+            side_hi = T.required_side_m(interval_hi, d, fx) * 1000
             sizing.append({"scenario": name, "beta_grey": round(b, 3), "range_m": d,
                            "tau_total": round(tau, 2),
                            "px_required": round(px_req, 1),
-                           "side_mm": round(T.required_side_m(px_req, d, fx) * 1000, 0)})
+                           "side_mm": round(T.required_side_m(px_req, d, fx) * 1000, 0),
+                           "side_mm_lo": round(side_lo, 0),
+                           "side_mm_hi": round(side_hi, 0)})
     pd.DataFrame(sizing).to_csv("results/turbidity_sizing.csv", index=False)
     summary["sizing"] = sizing
 
