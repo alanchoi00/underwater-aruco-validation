@@ -723,10 +723,20 @@ def main(dataset_dir="dataset"):
     summary["limitations"] = [
         "The pool is already in every frame: multiplier 0 is tau 0.18 to 1.49 by "
         "range, not clear water. tau_total is the honest axis, not added turbidity.",
-        "Veiling B fits with r2 negative (-0.57 to -2.72 across channels, from "
-        "veiling_B in this summary), not the r2 about 0.5 once claimed for it. It "
-        "sets only the DC level, which adaptive thresholding largely rejects, but at "
-        "extreme tau contrast approaches quantisation and the model degrades.",
+        "Veiling B's fit is bad enough to be physically incoherent, not merely "
+        "uncertain: it fits with r2 negative (-0.57 to -2.72 across channels, from "
+        "veiling_B in this summary; not the r2 about 0.5 once claimed for it), and "
+        "B_green (241.9 DN) exceeds the white sheet's own observed brightness "
+        "(about 154 DN near, 144 DN far); B_blue (225.8 DN) is the same story. The "
+        "cause is that the corrected, lower beta shrinks x = 1 - exp(-beta*d) in "
+        "fit_veiling, which inflates B = sum(xy)/sum(x^2) by roughly 29 percent. B "
+        "is used quantitatively, as B_vec in synthesise, so this is not a dead "
+        "parameter. The result survives it only because contrast is B-free by "
+        "construction (see turbidity.py's module docstring) and B stays under 255, "
+        "so synthesise never clips: the design's insensitivity to B was load-bearing "
+        "here, not merely lucky. B sets only the DC level, which adaptive "
+        "thresholding largely rejects, but at extreme tau contrast approaches "
+        "quantisation and the model degrades.",
         "Synthesis is not new imagery: the turbidity levels from one frame are "
         "correlated samples, so the Wilson intervals here understate the true "
         "uncertainty across levels.",
