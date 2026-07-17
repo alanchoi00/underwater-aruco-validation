@@ -238,6 +238,79 @@ def synthesise(img, depth, mask, B, dbeta):
     return np.clip(np.rint(out), 0, 255).astype(np.uint8)
 
 
+def _profile(gray, p, direction, reach_px, step=0.25):
+    """Bilinear intensity samples along a ray, from -reach to +reach about p."""
+    ts = np.arange(-reach_px, reach_px + step, step)
+    pts = p[None, :] + ts[:, None] * direction[None, :]
+    h, w = gray.shape[:2]
+    if (pts[:, 0].min() < 0 or pts[:, 0].max() > w - 2
+            or pts[:, 1].min() < 0 or pts[:, 1].max() > h - 2):
+        return None, None
+    vals = cv2.remap(gray.astype(np.float32),
+                     pts[:, 0].astype(np.float32).reshape(-1, 1),
+                     pts[:, 1].astype(np.float32).reshape(-1, 1),
+                     cv2.INTER_LINEAR).ravel()
+    return ts, vals
+
+
+def _rise_10_90(ts, vals):
+    """Distance between the 10% and 90% crossings of a monotone-ish step profile."""
+    lo, hi = float(np.min(vals)), float(np.max(vals))
+    if hi - lo < 20.0:
+        return float("nan")
+    norm = (vals - lo) / (hi - lo)
+    t10 = _crossing(ts, norm, 0.10)
+    t90 = _crossing(ts, norm, 0.90)
+    if t10 is None or t90 is None:
+        return float("nan")
+    return abs(t90 - t10)
+
+
+def _crossing(ts, norm, level):
+    """First linear-interpolated crossing of `level`, or None."""
+    s = np.sign(norm - level)
+    idx = np.nonzero(np.diff(s) != 0)[0]
+    if len(idx) == 0:
+        return None
+    i = idx[0]
+    y0, y1 = norm[i], norm[i + 1]
+    if y1 == y0:
+        return float(ts[i])
+    return float(ts[i] + (level - y0) / (y1 - y0) * (ts[i + 1] - ts[i]))
+
+
+def edge_width(gray, corners, n_samples=16, reach_px=8.0):
+    """Median 10-90% rise distance, in pixels, across the marker's outer boundary.
+
+    Measured in the ORIGINAL frame: the canonical warp resamples, and would report its own
+    interpolation kernel as if it were the water. Samples several points along each of the
+    four edges, crossing outward along the edge normal, and takes the median so a single
+    occluded or clipped sample cannot set the answer.
+    """
+    c = np.asarray(corners, dtype=float)
+    centre = c.mean(axis=0)
+    widths = []
+    for i in range(4):
+        a, b = c[i], c[(i + 1) % 4]
+        edge = b - a
+        length = np.linalg.norm(edge)
+        if length < 1e-6:
+            continue
+        normal = np.array([-edge[1], edge[0]]) / length
+        mid = (a + b) / 2.0
+        if np.dot(normal, mid - centre) < 0:
+            normal = -normal  # always point outward, away from the marker
+        for f in np.linspace(0.25, 0.75, n_samples // 4 + 1):
+            p = a + f * edge
+            ts, vals = _profile(gray, p, normal, reach_px)
+            if ts is None:
+                continue
+            w = _rise_10_90(ts, vals)
+            if np.isfinite(w):
+                widths.append(w)
+    return float(np.median(widths)) if widths else float("nan")
+
+
 def marker_ranges(layout, rv, tv):
     """Euclidean range from the camera to each marker's centre, given the board pose."""
     R = g.rodrigues(np.asarray(rv, dtype=float)[None])[0]

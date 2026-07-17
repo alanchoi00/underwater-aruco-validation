@@ -353,3 +353,33 @@ def test_synthesise_moves_pixels_toward_B_as_turbidity_grows():
     img[:] = 20
     out = T.synthesise(img, depth, mask, B=np.full(3, 180.0), dbeta=np.full(3, 3.0))
     assert np.all(out > 100), "heavy turbidity must wash a dark scene toward the veil"
+
+
+def _blurred_square(sigma, side=120, canvas=240, black=30, white=220):
+    img = np.full((canvas, canvas), white, dtype=np.uint8)
+    off = (canvas - side) // 2
+    img[off:off + side, off:off + side] = black
+    if sigma > 0:
+        img = cv2.GaussianBlur(img, (0, 0), sigma)
+    corners = np.array([[off, off], [off + side, off],
+                        [off + side, off + side], [off, off + side]], dtype=float)
+    return img, corners
+
+
+def test_edge_width_is_small_for_a_sharp_edge():
+    img, corners = _blurred_square(sigma=0.0)
+    assert T.edge_width(img, corners) < 2.5
+
+
+def test_edge_width_grows_with_a_known_gaussian():
+    widths = [T.edge_width(*_blurred_square(sigma=s)) for s in (0.0, 1.0, 2.0, 3.0)]
+    assert widths == sorted(widths), widths
+    assert widths[-1] > widths[0] + 2.0
+
+
+def test_edge_width_recovers_the_gaussian_scale():
+    """For a Gaussian edge the 10-90 rise is about 2.563 * sigma. Recovering that scale
+    (not just monotonicity) is what makes a measured trend interpretable as sigma(tau)."""
+    for sigma in (1.5, 2.5):
+        w = T.edge_width(*_blurred_square(sigma=sigma))
+        assert w == pytest.approx(2.563 * sigma, rel=0.25), (sigma, w)
