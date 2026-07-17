@@ -226,17 +226,24 @@ def sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map, B_map, summary):
 
     beta_vec = np.array([beta_map["b"], beta_map["g"], beta_map["r"]])
     B_vec = np.array([B_map["b"], B_map["g"], B_map["r"]])
+    beta_grey = beta_map["grey"]
     detector = detect.make_detector()
     shape = (ci["height"], ci["width"])
 
     frame_ids = sorted(set(int(f) for f in pred.frame_idx.unique()) & set(poses))
     cache = {}
+    rng_by_frame = {}
     for fi in frame_ids:
         rv, tv = poses[fi]
         cache[fi] = (T.plane_depth_map(lay, rv, tv, Km, shape),
                      T.board_mask(lay, rv, tv, Km, shape))
+        # Each marker's own range from the board pose, NOT from apparent size: the
+        # parent study established that apparent-size range flips between markers and
+        # drifts at oblique incidence, so the pose is the better estimate.
+        rng_by_frame[fi] = T.marker_ranges(lay, rv, tv)
 
     out = []
+    trial_rows = []
     for m in MULTIPLIERS:
         detected_by_frame = {}
         reference_by_frame = {} if m == 0.0 else None
@@ -273,8 +280,28 @@ def sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map, B_map, summary):
         trials = T.trials_at_tau(pred[pred.frame_idx.isin(frame_ids)], detected_by_frame)
         rates = M.rate_by_bin(trials, PX_BINS)
         rates["multiplier"] = m
-        rates["tau_added_grey"] = m * beta_map["grey"]
+        # dbeta_added = m * beta_grey is an ADDED ATTENUATION COEFFICIENT (units 1/m):
+        # it is the synthesis control knob passed into T.synthesise as dbeta, not an
+        # optical depth. tau = beta * range needs a range, which this quantity does not
+        # carry, so multiplying it by anything and calling it tau silently pools markers
+        # at very different actual optical depths at the same apparent size (a marker's
+        # size sets its range at fixed apparent px, and size varies 4.2x across the
+        # board). Do not reinstate tau_added_grey. The real per-trial tau_total, using
+        # each marker's own range from the board pose, is in turbidity_sweep_trials.csv
+        # and feeds figure_surface below.
+        rates["dbeta_added"] = m * beta_grey
         out.append(rates)
+
+        t = trials.copy()
+        t["range_m"] = [rng_by_frame[int(fi)][int(mid)]
+                        for fi, mid in zip(t["frame_idx"], t["marker_id"])]
+        # The pool's own water is already in every un-synthesised frame, so multiplier 0
+        # is NOT clear water: its tau is beta_grey * range_m, not zero.
+        t["tau_total"] = (1.0 + m) * beta_grey * t["range_m"]
+        t["multiplier"] = m
+        trial_rows.append(t[["frame_idx", "marker_id", "size_mm", "pred_px", "multiplier",
+                             "range_m", "tau_total", "detected"]])
+
         overall = trials.detected.mean() if len(trials) else 0.0
         summary.setdefault("overall_rate_by_multiplier", {})[str(m)] = {
             "rate": round(float(overall), 3), "n_trials": int(len(trials))}
@@ -283,29 +310,69 @@ def sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map, B_map, summary):
         if overall < 0.01:
             summary["sweep_stopped_at_multiplier"] = m
             break                       # detection is dead; further points say nothing
-    return pred, pd.concat(out, ignore_index=True)
+    return pred, pd.concat(out, ignore_index=True), pd.concat(trial_rows, ignore_index=True)
 
 
-def figure_surface(sweep_df, beta_grey, summary):
-    """rate(px, tau). The parent study's sigmoid is ONE DIAGONAL SLICE through this: in
-    real data apparent size and optical depth are both set by range, so they cannot be
+# Log-spaced edges covering the observed tau_total range (about 0.18 at multiplier 0,
+# short range, up to about 9 at multiplier 8, long range). Non-uniform, same as the old
+# per-multiplier axis was; pcolormesh handles irregular coordinates directly.
+TAU_BINS = [0.1, 0.15, 0.22, 0.32, 0.46, 0.68, 1.0, 1.5, 2.2, 3.2, 4.6, 6.8, 10.0]
+
+
+def figure_surface(trials_df, summary):
+    """rate(px, tau_total), tau_total = (1 + multiplier) * beta_grey * range_m from the
+    board pose. The parent study's sigmoid is ONE DIAGONAL SLICE through this: in real
+    data apparent size and optical depth are both set by range, so they cannot be
     separated. Synthesis holds pixels fixed and varies tau, which reality never permits.
     """
-    s = sweep_df[sweep_df.n >= MIN_TRIALS_PER_BIN].copy()
-    s["px"] = (s.bin_lo + s.bin_hi) / 2.0
-    piv = s.pivot_table(index="tau_added_grey", columns="px", values="rate",
-                        aggfunc="mean")
+    t = trials_df.copy()
+    t["px_bin"] = pd.cut(t.pred_px, PX_BINS, right=False)
+    t["tau_bin"] = pd.cut(t.tau_total, TAU_BINS, right=False)
+    binned = t.dropna(subset=["px_bin", "tau_bin"]).groupby(
+        ["tau_bin", "px_bin"], observed=True).agg(
+        n=("detected", "size"), rate=("detected", "mean")).reset_index()
+    s = binned[binned.n >= MIN_TRIALS_PER_BIN].copy()
+    s["px"] = s.px_bin.apply(lambda iv: (iv.left + iv.right) / 2.0)
+    s["tau"] = s.tau_bin.apply(lambda iv: (iv.left + iv.right) / 2.0)
+    piv = s.pivot_table(index="tau", columns="px", values="rate", aggfunc="mean",
+                        observed=True)
     fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, vizstyle.COL_W * 0.8))
     im = ax.pcolormesh(piv.columns, piv.index, piv.to_numpy(), cmap="viridis",
                        vmin=0, vmax=1, shading="nearest")
     ax.set_xscale("log")
     vizstyle.log_px_ticks(ax)
     ax.set_xlabel("apparent marker size (px)")
-    ax.set_ylabel("added optical depth (grey)")
-    ax.set_title("Detection rate vs apparent size and turbidity")
+    ax.set_ylabel("total optical depth, tau (grey)")
+    ax.set_title("Detection rate vs apparent size and total optical depth")
     fig.colorbar(im, ax=ax, label="detection rate")
-    summary["n_suppressed_surface_cells"] = int(
-        (sweep_df.n > 0).sum() - (sweep_df.n >= MIN_TRIALS_PER_BIN).sum())
+
+    # Cells above this line are still real trials (n >= MIN_TRIALS_PER_BIN), not blank
+    # space: detection is uniformly dead there (rate 0.0) and stays dead all the way to
+    # tau 10, which is itself the finding (the boundary sweeps right then never comes
+    # back). Clipping the axis to just past the highest NONZERO-rate cell keeps that
+    # boundary visible while not spending most of the canvas repeating "still zero".
+    # Every dropped cell is logged below so the cut is auditable, not silent.
+    nz = s[s.rate > 0]
+    tau_hi = s.tau_bin.map(lambda iv: float(iv.right)).astype(float)
+    if len(nz):
+        nz_tau_hi = nz.tau_bin.map(lambda iv: float(iv.right)).astype(float)
+        y_top = float(nz_tau_hi.max()) * 1.1
+    else:
+        y_top = float(tau_hi.max())
+    ax.set_ylim(top=y_top)
+    fig.tight_layout()
+
+    total_cells = (len(PX_BINS) - 1) * (len(TAU_BINS) - 1)
+    n_populated = int((binned.n > 0).sum())
+    n_kept = int(len(s))
+    n_clipped_from_view = int((tau_hi > y_top).sum())
+    summary["surface_cells_total"] = int(total_cells)
+    summary["surface_cells_empty_no_trials"] = int(total_cells - n_populated)
+    summary["surface_cells_suppressed_below_min_trials"] = int(n_populated - n_kept)
+    summary["surface_cells_kept"] = n_kept
+    summary["surface_cells_kept_clipped_from_view"] = n_clipped_from_view
+    summary["surface_cells_kept_clipped_from_view_max_rate"] = (
+        float(s[tau_hi > y_top].rate.max()) if n_clipped_from_view else 0.0)
     vizstyle.save(fig, "rate_px_tau_surface")
 
 
@@ -376,9 +443,11 @@ def main(dataset_dir="dataset"):
             [[r.c0x, r.c0y], [r.c1x, r.c1y], [r.c2x, r.c2y], [r.c3x, r.c3y]])
 
     B_map = dict(zip(veil.channel, veil.B))
-    pred, sweep_df = sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map, B_map, summary)
+    pred, sweep_df, trials_df = sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map,
+                                      B_map, summary)
     pred.to_csv("results/turbidity_trials.csv", index=False)
     sweep_df.to_csv("results/turbidity_sweep.csv", index=False)
+    trials_df.to_csv("results/turbidity_sweep_trials.csv", index=False)
 
     # The identity check itself (multiplier 0 vs the same frames read the same way but
     # un-synthesised) runs inside sweep() and asserts there, next to the frame reads it
@@ -404,7 +473,12 @@ def main(dataset_dir="dataset"):
                 "consistent path, so tau dependence is unaffected",
     }
 
-    figure_surface(sweep_df, beta_map["grey"], summary)
+    figure_surface(trials_df, summary)
+    summary["tau_total_by_multiplier"] = {
+        str(m): {"min": round(float(sub.tau_total.min()), 3),
+                "max": round(float(sub.tau_total.max()), 3)}
+        for m, sub in trials_df.groupby("multiplier")
+    }
 
     with open("results/turbidity_summary.json", "w") as f:
         json.dump(summary, f, indent=2, sort_keys=True)
