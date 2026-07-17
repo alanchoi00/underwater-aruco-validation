@@ -266,3 +266,69 @@ def test_marker_ranges_order_reverses_under_a_transposed_rotation(layout_true):
     tv = np.array([0.0, 0.0, 2.0])
     r = T.marker_ranges(layout_true, rv, tv)
     assert r[402] < r[201] - 0.05, r
+
+
+def _flat_scene(depth_m=2.0, shape=(40, 60)):
+    rng = np.random.default_rng(3)
+    img = rng.integers(0, 256, size=(*shape, 3), dtype=np.uint8)
+    depth = np.full(shape, float(depth_m))
+    mask = np.ones(shape, dtype=bool)
+    return img, depth, mask
+
+
+def test_synthesise_at_zero_added_turbidity_is_the_identity():
+    img, depth, mask = _flat_scene()
+    out = T.synthesise(img, depth, mask, B=np.array([150.0, 160.0, 60.0]),
+                       dbeta=np.zeros(3))
+    assert np.array_equal(out, img)
+
+
+def test_synthesise_scales_contrast_by_exactly_exp_minus_delta_tau():
+    """The claim the whole design rests on: any two pixels at the same range have their
+    difference scaled by exp(-dbeta*d), with B cancelling."""
+    img, depth, mask = _flat_scene(depth_m=2.0)
+    img[0, 0] = [200, 200, 200]
+    img[0, 1] = [40, 40, 40]
+    dbeta = np.array([0.30, 0.30, 0.30])
+    out = T.synthesise(img, depth, mask, B=np.array([150.0, 150.0, 150.0]), dbeta=dbeta)
+    before = img[0, 0].astype(float) - img[0, 1].astype(float)
+    after = out[0, 0].astype(float) - out[0, 1].astype(float)
+    assert np.allclose(after, before * np.exp(-0.30 * 2.0), atol=1.0)
+
+
+def test_synthesise_contrast_is_independent_of_B():
+    """B is known to r^2 ~ 0.5. If contrast depended on it, the design would be unsound.
+    """
+    img, depth, mask = _flat_scene(depth_m=2.0)
+    img[0, 0] = [200, 200, 200]
+    img[0, 1] = [40, 40, 40]
+    dbeta = np.full(3, 0.30)
+    a = T.synthesise(img, depth, mask, B=np.full(3, 60.0), dbeta=dbeta)
+    b = T.synthesise(img, depth, mask, B=np.full(3, 190.0), dbeta=dbeta)
+    ca = a[0, 0].astype(float) - a[0, 1].astype(float)
+    cb = b[0, 0].astype(float) - b[0, 1].astype(float)
+    assert np.allclose(ca, cb, atol=1.0)
+    # And the DC level genuinely does move, so the test above is not vacuous.
+    assert not np.allclose(a[0, 0], b[0, 0], atol=1.0)
+
+
+def test_synthesise_leaves_masked_out_pixels_untouched():
+    img, depth, mask = _flat_scene()
+    mask[:, :30] = False
+    out = T.synthesise(img, depth, mask, B=np.full(3, 150.0), dbeta=np.full(3, 0.5))
+    assert np.array_equal(out[:, :30], img[:, :30])
+    assert not np.array_equal(out[:, 30:], img[:, 30:])
+
+
+def test_synthesise_treats_nan_depth_as_off_plane():
+    img, depth, mask = _flat_scene()
+    depth[:, :30] = np.nan
+    out = T.synthesise(img, depth, mask, B=np.full(3, 150.0), dbeta=np.full(3, 0.5))
+    assert np.array_equal(out[:, :30], img[:, :30])
+
+
+def test_synthesise_moves_pixels_toward_B_as_turbidity_grows():
+    img, depth, mask = _flat_scene(depth_m=3.0)
+    img[:] = 20
+    out = T.synthesise(img, depth, mask, B=np.full(3, 180.0), dbeta=np.full(3, 3.0))
+    assert np.all(out > 100), "heavy turbidity must wash a dark scene toward the veil"

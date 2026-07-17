@@ -202,6 +202,33 @@ def board_mask(layout, rv, tv, K, shape, margin_m=0.04):
     return mask.astype(bool)
 
 
+def synthesise(img, depth, mask, B, dbeta):
+    """Add dbeta of attenuation to a real frame, per channel, per pixel.
+
+        I_new = B + (I_obs - B) * exp(-dbeta * d(x))
+
+    This is the simplified image formation model rearranged so that nothing is divided
+    by exp(-beta*d). Recovering J first (the textbook route) would divide by 0.204 in red
+    at 3 m, amplifying the error in the badly fitted B fivefold, worst exactly where
+    turbidity matters. Here B only sets the DC level, which ArUco's adaptive threshold
+    largely rejects, while the contrast term is exact and B-free.
+
+    Pixels outside mask, or whose depth is nan, are returned untouched.
+    """
+    src = np.asarray(img, dtype=np.float64)
+    d = np.asarray(depth, dtype=np.float64)
+    Bv = np.asarray(B, dtype=np.float64).reshape(1, 1, 3)
+    db = np.asarray(dbeta, dtype=np.float64).reshape(1, 1, 3)
+
+    with np.errstate(invalid="ignore"):
+        trans = np.exp(-db * np.nan_to_num(d, nan=0.0)[..., None])
+    new = Bv + (src - Bv) * trans
+
+    apply = np.asarray(mask, dtype=bool) & np.isfinite(d)
+    out = np.where(apply[..., None], new, src)
+    return np.clip(np.rint(out), 0, 255).astype(np.uint8)
+
+
 def marker_ranges(layout, rv, tv):
     """Euclidean range from the camera to each marker's centre, given the board pose."""
     R = g.rodrigues(np.asarray(rv, dtype=float)[None])[0]
