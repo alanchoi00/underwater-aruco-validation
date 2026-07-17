@@ -614,8 +614,11 @@ def main(dataset_dir="dataset"):
     summary["n_samples"] = int(len(samples))
     summary["range_m"] = [round(float(samples.range_m.min()), 2),
                           round(float(samples.range_m.max()), 2)]
-    summary["beta"] = {r.channel: {"beta": round(r.beta, 3), "r2": round(r.r2, 3)}
-                       for r in betas.itertuples()}
+    # Superseded pooled fit (measure_beta): kept for continuity with turbidity_beta.csv,
+    # not the authoritative beta. That is beta_fixed_effects[ch]["corrected"] below.
+    summary["beta_superseded_pooled"] = {
+        r.channel: {"beta": round(r.beta, 3), "r2": round(r.r2, 3)}
+        for r in betas.itertuples()}
     summary["beta_fixed_effects"] = {
         ch: {"raw": {"beta": round(fe_row[ch].beta_raw, 3),
                     "r2": round(fe_row[ch].r2_raw, 3)},

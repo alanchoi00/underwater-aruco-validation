@@ -225,7 +225,14 @@ def fit_beta_fixed_effects(samples, channel, k=None):
 
 
 def measure_beta(samples):
-    """Per-channel beta from the black/white contrast decay across the sample set."""
+    """Per-channel beta from the black/white contrast decay across the sample set.
+
+    Superseded by fit_beta_fixed_effects with the instrument-response correction,
+    which is the authoritative beta (about 19% lower; this pooled fit conflates each
+    marker's own intercept with the shared slope). Retained only so
+    turbidity_beta.csv keeps its original column for continuity with the earlier
+    stage; do not read its output as the beta.
+    """
     rows = []
     for ch in CHANNELS:
         sub = samples.dropna(subset=[f"white_{ch}", f"black_{ch}", "range_m"])
