@@ -729,6 +729,181 @@ def figure_sweep_strip(dataset_dir, poses, lay, Km, ci, beta_map, B_map, summary
         str(m): int(n) for m, n in detected_by_m.items()}
 
 
+VALIDATION_MARKER_ID = 201
+VALIDATION_NEAR_RANGE_M = 0.62       # marker 201's own range there, at about 189.7 px
+VALIDATION_FAR_RANGE_M = 3.19        # marker 201's own range there, at about 43.0 px
+
+
+def _frame_closest_to_range(poses, lay, mid, target_m):
+    """Frame id whose board pose puts marker `mid` closest to `target_m` range."""
+    best_fi, best_gap = None, float("inf")
+    for fi, (rv, tv) in poses.items():
+        rng = T.marker_ranges(lay, rv, tv).get(mid)
+        if rng is None:
+            continue
+        gap = abs(rng - target_m)
+        if gap < best_gap:
+            best_fi, best_gap = fi, gap
+    return best_fi
+
+
+def _marker_corners(det, frame_idx, mid):
+    sub = det[(det.frame_idx == frame_idx) & (det.marker_id == mid)]
+    if len(sub) == 0:
+        return None
+    r = sub.iloc[0]
+    return np.array([[r.c0x, r.c0y], [r.c1x, r.c1y], [r.c2x, r.c2y], [r.c3x, r.c3y]])
+
+
+def _grey_contrast(warped):
+    black, white = T.patch_means(warped)
+    return float(white[3] - black[3])          # index 3 is grey, see T.CHANNELS
+
+
+def figure_synthesis_validation(dataset_dir, det, poses, lay, Km, ci, beta_map, B_map,
+                                summary, mid=VALIDATION_MARKER_ID):
+    """Figure 2: the cross-validation made visual, for one marker at one real baseline.
+
+    Marker 201 appears at about 0.62 m (189.7 px) and, later in the run, at about
+    3.19 m (43.0 px): a 2.57 m baseline of real water between two real observations
+    of the SAME physical marker. The near observation is degraded to the far
+    observation's optical depth and compared against the far observation itself.
+
+    Deriving dbeta: synthesise() applies exp(-dbeta * d(x)) with d(x) the plane depth
+    at each pixel, which at marker 201's own location in the near frame is d_near, not
+    d_far. The added optical depth wanted is beta * (d_far - d_near), so
+        dbeta * d_near = beta * (d_far - d_near)
+        dbeta = beta * (d_far - d_near) / d_near
+    computed below from the measured beta and the two ranges, not hard-coded.
+
+    Two things this figure does NOT hide:
+
+    1. The far panel is upsampled from about 43 px to the canonical warp size, while
+       the near panel is downsampled from about 190 px to the same size. The far panel
+       is therefore blockier. That is what the data is, not a synthesis artifact.
+    2. The difference panel's residual is expected to be LARGELY the instrument
+       response, not model error: at 43 px apparent size, blur compresses the far
+       marker's rings enough that its measured contrast reads about 18 percent low,
+       which is exactly what k(apparent_px) (see turbidity.measure_instrument_response)
+       corrects. A roughly uniform contrast deficit in the difference panel is that
+       effect, expected and already accounted for elsewhere; anything OTHER than a
+       roughly uniform deficit (structure following the rings, one side brighter than
+       the other) would be a finding, not this effect, and must be reported as one.
+
+    Measured here: the raw deficit for THIS pair is about 70 percent, not the ~18
+    percent that a single k(px) reading suggests, and the difference panel does show
+    structure (it follows the marker's own ring pattern, brighter over the black
+    cells), which is what a CONTRAST-scaled residual looks like, not an additive
+    offset. Applying the k(px) correction to both ends only brings the gap to about
+    30 percent (turbidity_summary.json's crossval.corrected reports a 3 percent
+    MEDIAN and a 12 to 14 percent p90 over 5629 pairs), so this specific pair, the
+    largest baseline for this marker, is a genuine outlier against the pooled
+    statistic, not merely the pooled statistic's typical case drawn in pixels. The
+    pooled median remains the right number to cite; this figure is the worst
+    single case in the pool, not the typical one, and is reported as such.
+    """
+    fi_near = _frame_closest_to_range(poses, lay, mid, VALIDATION_NEAR_RANGE_M)
+    fi_far = _frame_closest_to_range(poses, lay, mid, VALIDATION_FAR_RANGE_M)
+
+    rv_n, tv_n = poses[fi_near]
+    rv_f, tv_f = poses[fi_far]
+    d_near = T.marker_ranges(lay, rv_n, tv_n)[mid]
+    d_far = T.marker_ranges(lay, rv_f, tv_f)[mid]
+
+    shape = (ci["height"], ci["width"])
+    depth_near = T.plane_depth_map(lay, rv_n, tv_n, Km, shape)
+    mask_near = T.board_mask(lay, rv_n, tv_n, Km, shape)
+
+    beta_vec = np.array([beta_map["b"], beta_map["g"], beta_map["r"]])
+    beta_grey = beta_map["grey"]
+    dbeta = beta_vec * (d_far - d_near) / d_near
+    dbeta_grey = beta_grey * (d_far - d_near) / d_near
+
+    img_near_path = os.path.join(dataset_dir, RUN, "frames", f"{fi_near:06d}.png")
+    img_far_path = os.path.join(dataset_dir, RUN, "frames", f"{fi_far:06d}.png")
+    img_near = cv2.imread(img_near_path)
+    img_far = cv2.imread(img_far_path)
+    if img_near is None:
+        raise FileNotFoundError(img_near_path)
+    if img_far is None:
+        raise FileNotFoundError(img_far_path)
+
+    B_vec = np.array([B_map["b"], B_map["g"], B_map["r"]])
+    degraded = T.synthesise(img_near, depth_near, mask_near, B_vec, dbeta)
+
+    corners_near = _marker_corners(det, fi_near, mid)
+    corners_far = _marker_corners(det, fi_far, mid)
+    if corners_near is None or corners_far is None:
+        raise ValueError(
+            f"marker {mid} has no detection in frame {fi_near} or {fi_far}")
+    px_near = detect.apparent_size_px(corners_near)
+    px_far = detect.apparent_size_px(corners_far)
+
+    raw_near_w = T.warp_marker(img_near, corners_near)
+    deg_near_w = T.warp_marker(degraded, corners_near)
+    far_w = T.warp_marker(img_far, corners_far)
+
+    c_near = _grey_contrast(raw_near_w)
+    c_deg = _grey_contrast(deg_near_w)
+    c_far = _grey_contrast(far_w)
+    deficit_pct = (c_deg - c_far) / c_far * 100.0
+
+    deg_grey = cv2.cvtColor(deg_near_w, cv2.COLOR_BGR2GRAY).astype(float)
+    far_grey = cv2.cvtColor(far_w, cv2.COLOR_BGR2GRAY).astype(float)
+    diff = deg_grey - far_grey
+    vlim = max(float(np.percentile(np.abs(diff), 99)), 1.0)
+
+    # Titles are kept short on purpose: a long third line (e.g. spelling out
+    # "downsampled"/"upsampled" per panel) overflows its own axes and bleeds into the
+    # neighbouring panel's title at this width. That resampling note goes in the
+    # shared caption below instead, where it has the whole figure width to sit in.
+    fig, axes = plt.subplots(1, 4, figsize=(vizstyle.WIDE_W * 1.6, vizstyle.WIDE_W * 0.5))
+    axes[0].imshow(cv2.cvtColor(raw_near_w, cv2.COLOR_BGR2RGB))
+    axes[0].set_title(f"raw near\nrange {d_near:.2f} m, tau {beta_grey * d_near:.2f}\n"
+                      f"contrast {c_near:.1f} DN, {px_near:.0f} px", fontsize=6.5)
+
+    axes[1].imshow(cv2.cvtColor(deg_near_w, cv2.COLOR_BGR2RGB))
+    axes[1].set_title("near degraded to tau_far\n"
+                      f"dbeta_grey added {dbeta_grey:.3f} /m\n"
+                      f"contrast {c_deg:.1f} DN, {px_near:.0f} px", fontsize=6.5)
+
+    axes[2].imshow(cv2.cvtColor(far_w, cv2.COLOR_BGR2RGB))
+    axes[2].set_title(f"real far\nrange {d_far:.2f} m, tau {beta_grey * d_far:.2f}\n"
+                      f"contrast {c_far:.1f} DN, {px_far:.0f} px", fontsize=6.5)
+
+    im = axes[3].imshow(diff, cmap="RdBu_r", vmin=-vlim, vmax=vlim)
+    axes[3].set_title("difference (degraded minus real far)\n"
+                      f"mean {float(diff.mean()):+.1f} DN, "
+                      f"contrast deficit {deficit_pct:.0f} pct", fontsize=6.5)
+    fig.colorbar(im, ax=axes[3], fraction=0.046, pad=0.04, label="DN")
+
+    for ax in axes:
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.suptitle(f"Marker {mid}, baseline {d_far - d_near:.2f} m of real water "
+                f"(frame {fi_near} to frame {fi_far})", fontsize=8, y=1.06)
+    fig.text(0.5, -0.04,
+             f"near panels resampled DOWN from {px_near:.0f} px; far panel resampled "
+             f"UP from {px_far:.0f} px to the same canonical size (not a synthesis "
+             "artifact)", ha="center", va="top", fontsize=6.5,
+             color=vizstyle.TEXT_SECONDARY)
+    fig.tight_layout()
+    vizstyle.save(fig, "synthesis_validation")
+
+    summary["synthesis_validation"] = {
+        "marker_id": int(mid), "frame_near": int(fi_near), "frame_far": int(fi_far),
+        "range_near_m": round(float(d_near), 3), "range_far_m": round(float(d_far), 3),
+        "px_near_native": round(float(px_near), 1),
+        "px_far_native": round(float(px_far), 1),
+        "dbeta_grey_added": round(float(dbeta_grey), 4),
+        "contrast_raw_near": round(c_near, 1), "contrast_degraded_near": round(c_deg, 1),
+        "contrast_real_far": round(c_far, 1),
+        "contrast_deficit_pct": round(float(deficit_pct), 1),
+        "diff_mean_dn": round(float(diff.mean()), 2),
+        "diff_std_dn": round(float(diff.std()), 2),
+    }
+
+
 def main(dataset_dir="dataset"):
     vizstyle.apply()
     os.makedirs("results", exist_ok=True)
@@ -801,6 +976,8 @@ def main(dataset_dir="dataset"):
     B_map = dict(zip(veil.channel, veil.B))
 
     figure_sweep_strip(dataset_dir, poses, lay, Km, ci, beta_map, B_map, summary)
+    figure_synthesis_validation(dataset_dir, det, poses, lay, Km, ci, beta_map, B_map,
+                                summary)
 
     pred, sweep_df, trials_df = sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map,
                                       B_map, summary)
