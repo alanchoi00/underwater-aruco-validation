@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import pandas as pd
 import pytest
@@ -197,3 +198,71 @@ def test_marker_ranges_are_all_near_the_board_range(layout_true):
     r = T.marker_ranges(layout_true, rv, tv)
     assert set(r) == set(g.IDS)
     assert all(1.9 < v < 2.2 for v in r.values()), r
+
+
+def test_plane_depth_matches_an_independent_reference_at_an_oblique_pose(K, layout_true):
+    """Pins the rotation convention against an outside authority, not against itself.
+
+    All the fronto-parallel tests above use rv = 0, the one pose where a transposed
+    R, a swapped rotation convention, or an R @ x vs x @ R.T mix-up cannot show up:
+    with no rotation, R = R.T = I. Here the pose is genuinely tilted (pitch of 0.4
+    rad about the board's y axis), and the expected range at each pixel is built by
+    hand from cv2.Rodrigues plus the ray/plane intersection n . (s*ray - t) = 0,
+    range = |s*ray|, deliberately not via g.rodrigues or any helper plane_depth_map
+    itself calls. Agreement here means the implementation's rotation matches an
+    independent derivation, not just its own internal convention.
+    """
+    rv = np.array([0.0, 0.4, 0.0])
+    tv = np.array([0.1, -0.05, 2.0])
+    Km = _K_mat(K)
+    shape = (540, 960)
+    dm = T.plane_depth_map(layout_true, rv, tv, Km, shape)
+
+    R, _ = cv2.Rodrigues(rv)
+    n = R @ np.array([0.0, 0.0, 1.0])
+    Kinv = np.linalg.inv(Km)
+
+    for u, v in [(483, 280), (100, 280), (880, 280), (483, 50), (483, 500)]:
+        ray = Kinv @ np.array([float(u), float(v), 1.0])
+        s = (n @ tv) / (n @ ray)
+        pt = s * ray
+        expected = float(np.linalg.norm(pt))
+        assert dm[v, u] == pytest.approx(expected, rel=1e-9), (u, v, dm[v, u], expected)
+
+
+def test_plane_depth_asymmetry_would_reverse_under_a_transposed_rotation(K, layout_true):
+    """A property that holds for R but fails for R.T, at the same oblique pose as above.
+
+    Pitching the board by +0.4 rad about y tilts it so the left side of the frame is
+    farther from the camera than the right side. R.T is, for this single-axis
+    rotation, the same as rotating by -0.4 rad, which tilts the board the other way
+    and makes the left side nearer instead. So this ordering is not just non-trivial,
+    it is a direct witness of R vs R.T: a transposed rotation, or any convention that
+    silently swaps R for its inverse, flips this inequality rather than merely
+    perturbing it.
+    """
+    rv = np.array([0.0, 0.4, 0.0])
+    tv = np.array([0.1, -0.05, 2.0])
+    Km = _K_mat(K)
+    dm = T.plane_depth_map(layout_true, rv, tv, Km, (540, 960))
+    left = dm[280, 100]
+    centre = dm[280, round(K["cx"])]
+    right = dm[280, 880]
+    assert left > centre > right, (left, centre, right)
+
+
+def test_marker_ranges_order_reverses_under_a_transposed_rotation(layout_true):
+    """marker_ranges at a tilted pose: markers further along the tilt axis are nearer.
+
+    Pitching by +0.4 rad about the board's y axis brings markers with larger board-x
+    closer to the camera (their board-frame x maps partly onto -z in camera coords).
+    Marker 201 sits at board x = 0 (the gauge) and 402 at the largest board x, so 402
+    must be nearer than 201. Under R.T this same pose is a -0.4 rad pitch, which
+    pushes larger-x markers further away instead, reversing the inequality. So this
+    ordering is rotation-convention-sensitive with an obvious expected sign, not just
+    a plausible-looking number.
+    """
+    rv = np.array([0.0, 0.4, 0.0])
+    tv = np.array([0.0, 0.0, 2.0])
+    r = T.marker_ranges(layout_true, rv, tv)
+    assert r[402] < r[201] - 0.05, r
