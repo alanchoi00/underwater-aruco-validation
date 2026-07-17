@@ -600,3 +600,20 @@ def test_fit_beta_fixed_effects_correction_moves_beta_toward_truth():
     beta_corrected, _, _ = T.fit_beta_fixed_effects(samples, "r", k=(k_px, k_val))
     assert beta_raw > beta_true + 0.02, "the fixture must actually be biased"
     assert abs(beta_corrected - beta_true) < abs(beta_raw - beta_true)
+
+
+def test_px_at_rate_interpolates_the_crossing():
+    px = np.array([10.0, 20.0, 30.0, 40.0])
+    rates = np.array([0.0, 0.25, 0.75, 1.0])
+    assert T.px_at_rate(px, rates, 0.5) == pytest.approx(25.0, abs=0.5)
+
+
+def test_px_at_rate_is_nan_when_the_curve_never_crosses():
+    px = np.array([10.0, 20.0, 30.0])
+    assert np.isnan(T.px_at_rate(px, np.array([0.0, 0.1, 0.2]), 0.5))
+    assert np.isnan(T.px_at_rate(px, np.array([0.8, 0.9, 1.0]), 0.5))
+
+
+def test_required_side_matches_the_pinhole_relation():
+    # 25 px at 5 m with f = 797.54 needs a 157 mm marker.
+    assert T.required_side_m(25.0, 5.0, 797.54) == pytest.approx(0.1567, abs=1e-3)

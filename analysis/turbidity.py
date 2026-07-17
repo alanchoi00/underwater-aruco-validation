@@ -456,6 +456,37 @@ def trials_at_tau(pred, detected_by_frame):
     return out.drop(columns=["present"])
 
 
+def px_at_rate(bins_px, rates, level=0.5):
+    """Apparent size at which the detection rate crosses `level`.
+
+    Linear interpolation between adjacent bins, on the LAST upward crossing, so a single
+    noisy low-px bin cannot claim the threshold. Returns nan when the curve never crosses,
+    which is honest: at high tau, detection may never reach 50% at any size we measured,
+    and an extrapolated number there would be an invention.
+    """
+    px = np.asarray(bins_px, dtype=float)
+    r = np.asarray(rates, dtype=float)
+    ok = np.isfinite(px) & np.isfinite(r)
+    px, r = px[ok], r[ok]
+    if len(px) < 2 or r.max() < level or r.min() > level:
+        return float("nan")
+    order = np.argsort(px)
+    px, r = px[order], r[order]
+    cross = np.nonzero((r[:-1] < level) & (r[1:] >= level))[0]
+    if len(cross) == 0:
+        return float("nan")
+    i = cross[-1]
+    if r[i + 1] == r[i]:
+        return float(px[i])
+    f = (level - r[i]) / (r[i + 1] - r[i])
+    return float(px[i] + f * (px[i + 1] - px[i]))
+
+
+def required_side_m(px_required, d, f):
+    """Marker side needed to present px_required at range d, from the pinhole relation."""
+    return float(px_required * d / f)
+
+
 def marker_ranges(layout, rv, tv):
     """Euclidean range from the camera to each marker's centre, given the board pose."""
     R = g.rodrigues(np.asarray(rv, dtype=float)[None])[0]

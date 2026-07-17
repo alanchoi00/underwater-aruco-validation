@@ -376,6 +376,82 @@ def figure_surface(trials_df, summary):
     vizstyle.save(fig, "rate_px_tau_surface")
 
 
+TAU_BINS = [0.0, 0.35, 0.55, 0.8, 1.1, 1.5, 2.0, 2.6, 3.4, 4.5, 6.0, 14.0]
+BETA_SCENARIOS = {"this pool": None, "clearer (0.15/m)": 0.15,
+                  "murkier (0.60/m)": 0.60, "harbour (1.00/m)": 1.00}
+
+
+def figure_px_required(trials, fx, summary):
+    """The deliverable: apparent size at the 50% crossing, as a function of REAL tau.
+
+    Bins by tau_total (= (1 + m) * beta_grey * range_m, per trial, range from the board
+    pose), NOT by the sweep's control knob. m * beta_grey has units 1/m and is an added
+    attenuation coefficient, not an optical depth; binning on it pools markers at very
+    different real tau (at 150 px the 149.4 mm marker is at 0.79 m and the 35.6 mm at
+    0.19 m, so one cell mixes tau 0.27 to 1.15).
+
+    3(n+2) = 21 px is the tau -> 0 asymptote of this curve, not a constant: the fiducial
+    literature quotes it as though water were air.
+    """
+    t = trials.copy()
+    t["tau_bin"] = pd.cut(t.tau_total, TAU_BINS, right=False)
+    t["px_bin"] = pd.cut(t.pred_px, PX_BINS, right=False)
+
+    rows = []
+    for tb, sub in t.groupby("tau_bin", observed=True):
+        agg = sub.groupby("px_bin", observed=True).agg(n=("detected", "size"),
+                                                       k=("detected", "sum"))
+        agg = agg[agg.n >= MIN_TRIALS_PER_BIN]
+        if len(agg) < 2:
+            continue                     # cannot locate a crossing from one point
+        px_c = np.array([(iv.left + iv.right) / 2.0 for iv in agg.index])
+        rate = (agg.k / agg.n).to_numpy()
+        rows.append({"tau_lo": float(tb.left), "tau_hi": float(tb.right),
+                     "tau_mid": float((tb.left + tb.right) / 2.0),
+                     "n": int(agg.n.sum()), "max_rate": float(rate.max()),
+                     "px_required": T.px_at_rate(px_c, rate, 0.5)})
+    curve = pd.DataFrame(rows)
+    curve.to_csv("results/px_required_vs_tau.csv", index=False)
+    summary["px_required_vs_tau"] = curve.to_dict("records")
+
+    ok = curve.dropna(subset=["px_required"])
+    fig, ax = plt.subplots(figsize=(vizstyle.COL_W, vizstyle.COL_W * 0.75))
+    ax.plot(ok.tau_mid, ok.px_required, "o-", color="#184f95", lw=2, ms=5)
+    ax.axhline(M.pixel_budget_px(5), color=vizstyle.TEXT_SECONDARY, ls="--", lw=1.5)
+    ax.annotate("3(n+2) = 21 px, the clear-water budget",
+                xy=(ok.tau_mid.min(), M.pixel_budget_px(5)), xytext=(4, 4),
+                textcoords="offset points", fontsize=6, color=vizstyle.TEXT_SECONDARY)
+    ax.set_xlabel("total optical depth, tau (grey)")
+    ax.set_ylabel("apparent size at 50% detection (px)")
+    ax.set_title("Pixel budget grows with optical depth")
+    fig.tight_layout()
+    vizstyle.save(fig, "px_required_vs_tau")
+
+    # Where the curve reports nan, detection never reached 50% at ANY size we measured.
+    # That is a result, not a gap: above roughly tau 2.3 turbidity limits regardless of
+    # apparent size. Record it rather than interpolating through it.
+    dead = curve[curve.px_required.isna()]
+    summary["tau_bins_never_reaching_50pc"] = [
+        {"tau_lo": r.tau_lo, "tau_hi": r.tau_hi, "n": r.n, "max_rate": round(r.max_rate, 3)}
+        for r in dead.itertuples()]
+
+    sizing = []
+    for name, beta in BETA_SCENARIOS.items():
+        b = summary["beta_grey_used"] if beta is None else beta
+        for d in (3.0, 5.0):
+            tau = b * d
+            if tau > ok.tau_mid.max() or tau < ok.tau_mid.min():
+                px_req = float("nan")     # outside what was measured; do not invent it
+            else:
+                px_req = float(np.interp(tau, ok.tau_mid, ok.px_required))
+            sizing.append({"scenario": name, "beta_grey": round(b, 3), "range_m": d,
+                           "tau_total": round(tau, 2),
+                           "px_required": round(px_req, 1),
+                           "side_mm": round(T.required_side_m(px_req, d, fx) * 1000, 0)})
+    pd.DataFrame(sizing).to_csv("results/turbidity_sizing.csv", index=False)
+    summary["sizing"] = sizing
+
+
 def main(dataset_dir="dataset"):
     vizstyle.apply()
     os.makedirs("results", exist_ok=True)
@@ -479,6 +555,9 @@ def main(dataset_dir="dataset"):
                 "max": round(float(sub.tau_total.max()), 3)}
         for m, sub in trials_df.groupby("multiplier")
     }
+
+    summary["beta_grey_used"] = beta_map["grey"]
+    figure_px_required(trials_df, ci["fx"], summary)
 
     with open("results/turbidity_summary.json", "w") as f:
         json.dump(summary, f, indent=2, sort_keys=True)
