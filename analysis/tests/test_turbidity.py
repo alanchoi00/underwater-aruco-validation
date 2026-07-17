@@ -1,4 +1,6 @@
 import numpy as np
+import pandas as pd
+import pytest
 
 from analysis import turbidity as T
 
@@ -40,3 +42,44 @@ def test_warp_marker_is_size_invariant():
     bb, wb = T.patch_means(T.warp_marker(big, cb))
     assert np.allclose(bs, bb, atol=2.0)
     assert np.allclose(ws, wb, atol=2.0)
+
+
+def test_fit_beta_recovers_a_known_decay():
+    d = np.linspace(0.5, 4.0, 60)
+    beta, c0, r2 = T.fit_beta(d, 120.0 * np.exp(-0.42 * d))
+    assert beta == pytest.approx(0.42, abs=1e-6)
+    assert c0 == pytest.approx(120.0, rel=1e-6)
+    assert r2 > 0.999
+
+
+def test_fit_beta_ignores_nonpositive_contrast():
+    """At extreme range the measured contrast can go negative through noise. log() of it
+    is nan, and one nan would otherwise poison the whole fit."""
+    d = np.array([0.5, 1.0, 1.5, 2.0, 2.5])
+    c = np.array([100.0, 78.7, 62.0, 48.8, -3.0])
+    beta, _, r2 = T.fit_beta(d, c)
+    assert beta == pytest.approx(0.48, abs=0.02)
+    assert np.isfinite(r2)
+
+
+def test_fit_veiling_recovers_a_known_B():
+    d = np.linspace(0.5, 4.0, 40)
+    B_true, beta = 150.0, 0.33
+    black = B_true * (1 - np.exp(-beta * d))
+    B, r2 = T.fit_veiling(d, black, beta)
+    assert B == pytest.approx(B_true, rel=1e-6)
+    assert r2 > 0.999
+
+
+def test_measure_beta_is_per_channel_and_red_dies_fastest():
+    d = np.linspace(0.6, 3.0, 50)
+    truth = {"b": 0.33, "g": 0.29, "r": 0.53, "grey": 0.31}
+    rows = {"range_m": d}
+    for ch, bt in truth.items():
+        rows[f"white_{ch}"] = 200.0 * np.exp(-bt * d) + 40.0
+        rows[f"black_{ch}"] = 40.0
+    out = T.measure_beta(pd.DataFrame(rows)).set_index("channel")
+    for ch, bt in truth.items():
+        assert out.loc[ch, "beta"] == pytest.approx(bt, abs=1e-6)
+        assert out.loc[ch, "n"] == 50
+    assert out.loc["r", "beta"] > out.loc["g", "beta"]

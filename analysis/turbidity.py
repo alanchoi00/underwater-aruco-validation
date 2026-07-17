@@ -14,6 +14,7 @@ That matters, because B itself fits badly (r^2 ~ 0.5) while beta fits well (r^2 
 """
 import cv2
 import numpy as np
+import pandas as pd
 
 CHANNELS = ("b", "g", "r", "grey")
 
@@ -84,3 +85,64 @@ def _box(start, length, side):
     if b > a:
         m[a:b, a:b] = True
     return m
+
+
+def _r2(y, yhat):
+    ss_res = float(np.sum((y - yhat) ** 2))
+    ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+    return 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+
+def fit_beta(d, contrast):
+    """Fit contrast(d) = c0 * exp(-beta * d) by least squares on log(contrast).
+
+    Returns (beta, c0, r2), with r2 reported in log space, which is where the fit lives.
+    Non-positive contrast (noise at long range) carries no log and is dropped.
+    """
+    d = np.asarray(d, dtype=float)
+    c = np.asarray(contrast, dtype=float)
+    ok = np.isfinite(d) & np.isfinite(c) & (c > 0)
+    if ok.sum() < 2:
+        return float("nan"), float("nan"), float("nan")
+    y = np.log(c[ok])
+    slope, intercept = np.polyfit(d[ok], y, 1)
+    return float(-slope), float(np.exp(intercept)), _r2(y, slope * d[ok] + intercept)
+
+
+def fit_veiling(d, black, beta):
+    """Fit I_black(d) = B * (1 - exp(-beta * d)) for B, with beta already known.
+
+    Linear in B through the origin, so B is a ratio of sums. Reported with its r2 because
+    that r2 is the point: it is around 0.5 on real data, and the design depends on nobody
+    trusting B further than that.
+    """
+    d = np.asarray(d, dtype=float)
+    y = np.asarray(black, dtype=float)
+    x = 1 - np.exp(-beta * d)
+    ok = np.isfinite(x) & np.isfinite(y)
+    if ok.sum() < 2 or not np.any(x[ok] > 0):
+        return float("nan"), float("nan")
+    B = float(np.sum(x[ok] * y[ok]) / np.sum(x[ok] * x[ok]))
+    return B, _r2(y[ok], B * x[ok])
+
+
+def measure_beta(samples):
+    """Per-channel beta from the black/white contrast decay across the sample set."""
+    rows = []
+    for ch in CHANNELS:
+        sub = samples.dropna(subset=[f"white_{ch}", f"black_{ch}", "range_m"])
+        beta, c0, r2 = fit_beta(sub["range_m"].to_numpy(),
+                                (sub[f"white_{ch}"] - sub[f"black_{ch}"]).to_numpy())
+        rows.append({"channel": ch, "beta": beta, "c0": c0, "r2": r2, "n": int(len(sub))})
+    return pd.DataFrame(rows)
+
+
+def measure_veiling(samples, betas):
+    """Per-channel B from the black patches, given beta. betas maps channel -> beta."""
+    rows = []
+    for ch in CHANNELS:
+        sub = samples.dropna(subset=[f"black_{ch}", "range_m"])
+        B, r2 = fit_veiling(sub["range_m"].to_numpy(), sub[f"black_{ch}"].to_numpy(),
+                            betas[ch])
+        rows.append({"channel": ch, "B": B, "r2": r2, "n": int(len(sub))})
+    return pd.DataFrame(rows)
