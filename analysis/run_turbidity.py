@@ -469,6 +469,20 @@ def figure_px_required(trials, fx, summary):
                     fontsize=6, color="#c0392b", va="top")
         ax.set_xlim(right=x_right)
 
+    # Show the measurement's own resolution, because without it this figure lies. The
+    # y-axis is zoomed to about 21 to 33 px, which magnifies the 4.9 px spread into what
+    # looks like a rise at the last live point. It is not: px_at_rate interpolates
+    # between px bin CENTRES, and every value here falls inside the single interval
+    # [24.5, 33.0]. Banding that interval shows at a glance that the whole curve sits
+    # within one bin's width, so no trend is resolvable and none should be read.
+    ax.axhspan(interval_lo, interval_hi, color=vizstyle.GHOST_COLOR, alpha=0.45,
+               zorder=0)
+    ax.annotate(f"one px bin interval [{interval_lo:.1f}, {interval_hi:.1f}]:"
+                " no trend is resolvable here",
+                xy=(ax.get_xlim()[0], interval_lo), xytext=(4, 3),
+                textcoords="offset points", fontsize=5.5,
+                color=vizstyle.TEXT_SECONDARY, va="bottom")
+
     ax.set_xlabel("total optical depth, tau (grey)")
     ax.set_ylabel("apparent size at 50% detection (px)")
     ax.set_title("27 px needed, not 21; fails above tau 2", fontsize=9)
