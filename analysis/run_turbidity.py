@@ -530,8 +530,16 @@ def figure_px_required(trials, fx, summary):
                 px_req = float("nan")     # outside what was measured; do not invent it
             else:
                 px_req = float(np.interp(tau, ok.tau_mid, ok.px_required))
-            side_lo = T.required_side_m(interval_lo, d, fx) * 1000
-            side_hi = T.required_side_m(interval_hi, d, fx) * 1000
+            # The interval is derived from range alone, so it would happily populate even
+            # where px_required is nan. It must not: quoting 92 to 124 mm for harbour
+            # water at 3 m would invent a bracket for a regime where we measured that
+            # detection collapses at every size. No crossing means no answer, bracket
+            # included.
+            if np.isnan(px_req):
+                side_lo = side_hi = float("nan")
+            else:
+                side_lo = T.required_side_m(interval_lo, d, fx) * 1000
+                side_hi = T.required_side_m(interval_hi, d, fx) * 1000
             sizing.append({"scenario": name, "beta_grey": round(b, 3), "range_m": d,
                            "tau_total": round(tau, 2),
                            "px_required": round(px_req, 1),
