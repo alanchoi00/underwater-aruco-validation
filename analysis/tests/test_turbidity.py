@@ -450,3 +450,153 @@ def test_trials_at_tau_scores_a_frame_with_no_detections_as_all_misses():
     out = T.trials_at_tau(pred, {})
     assert out.detected.tolist() == [0]
     assert len(out) == 1
+
+
+def _instrument_samples(band=(0.62, 0.88)):
+    """Synthetic samples in a fixed range band with a known instrument response.
+
+    Four marker groups, each at an (approximately) fixed apparent size, all seeing the
+    SAME true contrast (100.0) because they share the same water and range band. Each
+    group's observed contrast is knocked down by a known k(px), so the calibration has
+    a single correct answer to recover.
+    """
+    true_k = {42.0: 0.617, 50.0: 0.627, 84.0: 0.719, 170.0: 0.757}
+    largest_px = max(true_k)
+    norm = true_k[largest_px]
+    rows = []
+    rng = np.random.default_rng(7)
+    for mid, (px, k) in enumerate(true_k.items()):
+        d = rng.uniform(band[0], band[1], size=12)
+        contrast = 100.0 * k
+        rows.append(pd.DataFrame({
+            "marker_id": mid,
+            "range_m": d,
+            "apparent_px": np.full(12, px),
+            "white_r": contrast + 40.0,
+            "black_r": np.full(12, 40.0),
+        }))
+    samples = pd.concat(rows, ignore_index=True)
+    expected_k = {px: k / norm for px, k in true_k.items()}
+    return samples, expected_k
+
+
+def test_measure_instrument_response_recovers_a_known_synthetic_response():
+    samples, expected_k = _instrument_samples()
+    k_px, k_val = T.measure_instrument_response(samples, "r")
+    assert list(k_px) == sorted(k_px), "must be sorted by apparent px"
+    assert k_val[np.argmax(k_px)] == pytest.approx(1.0)
+    for px, k in expected_k.items():
+        i = list(k_px).index(px)
+        assert k_val[i] == pytest.approx(k, abs=1e-6)
+
+
+def test_apply_instrument_response_interpolates_and_clamps():
+    k_px = np.array([40.0, 80.0, 160.0])
+    k_val = np.array([0.6, 0.8, 1.0])
+    out = T.apply_instrument_response(np.array([40.0, 60.0, 80.0, 200.0, 10.0]),
+                                      k_px, k_val)
+    assert out[0] == pytest.approx(0.6)
+    assert out[1] == pytest.approx(0.7)
+    assert out[2] == pytest.approx(0.8)
+    # Outside the calibrated range, np.interp clamps to the nearest edge value.
+    assert out[3] == pytest.approx(1.0)
+    assert out[4] == pytest.approx(0.6)
+
+
+def _fixed_effects_samples(beta_true=0.3, seed=0, noise=0.0):
+    """Synthetic samples for several markers with DIFFERENT intercepts, same beta.
+
+    A single-intercept (pooled) fit cannot recover beta_true from this data because
+    the marker id is correlated with both range coverage and c0, which is exactly
+    the confound fit_beta_fixed_effects exists to remove.
+    """
+    rng = np.random.default_rng(seed)
+    intercepts = {201: 5.2, 301: 4.6, 302: 4.0, 401: 3.5}
+    ranges = {201: (0.6, 3.0), 301: (0.6, 2.4), 302: (0.6, 1.8), 401: (0.6, 1.3)}
+    rows = []
+    for mid, a in intercepts.items():
+        lo, hi = ranges[mid]
+        d = np.linspace(lo, hi, 30)
+        mean_log_c = a - beta_true * d
+        c = np.exp(mean_log_c + rng.normal(0.0, noise, size=d.size))
+        rows.append(pd.DataFrame({
+            "marker_id": mid, "range_m": d,
+            "white_r": c + 40.0, "black_r": np.full(d.size, 40.0),
+            "apparent_px": np.full(d.size, 100.0),
+        }))
+    return pd.concat(rows, ignore_index=True), intercepts
+
+
+def test_fit_beta_fixed_effects_recovers_a_known_beta_a_pooled_fit_gets_wrong():
+    samples, intercepts = _fixed_effects_samples(beta_true=0.3)
+    beta, r2, by_id = T.fit_beta_fixed_effects(samples, "r")
+    assert beta == pytest.approx(0.3, abs=1e-3)
+    assert r2 > 0.999
+    for mid, a in intercepts.items():
+        assert by_id[mid] == pytest.approx(np.exp(a), rel=1e-3)
+
+    pooled_beta, _, _ = T.fit_beta(samples["range_m"].to_numpy(),
+                                   (samples["white_r"] - samples["black_r"]).to_numpy())
+    assert abs(pooled_beta - 0.3) > 0.03, (
+        "the pooled fit must be measurably wrong for this test to demonstrate the "
+        "point of the fixed-effects fit"
+    )
+
+
+def test_fit_beta_fixed_effects_r2_drops_with_real_scatter():
+    """Same real-scatter requirement as fit_beta: a stubbed r2 must not survive."""
+    samples, _ = _fixed_effects_samples(beta_true=0.3, seed=11, noise=0.3)
+    _, r2, _ = T.fit_beta_fixed_effects(samples, "r")
+    assert 0.3 < r2 < 0.97, r2
+
+
+def test_fit_beta_fixed_effects_with_k_equal_one_matches_uncorrected():
+    samples, _ = _fixed_effects_samples(beta_true=0.35, seed=2)
+    beta_plain, r2_plain, ids_plain = T.fit_beta_fixed_effects(samples, "r")
+    k_px = np.array([50.0, 150.0])
+    k_val = np.array([1.0, 1.0])
+    beta_k, r2_k, ids_k = T.fit_beta_fixed_effects(samples, "r", k=(k_px, k_val))
+    assert beta_k == pytest.approx(beta_plain, abs=1e-9)
+    assert r2_k == pytest.approx(r2_plain, abs=1e-9)
+    for mid in ids_plain:
+        assert ids_k[mid] == pytest.approx(ids_plain[mid], rel=1e-9)
+
+
+def test_fit_beta_fixed_effects_correction_moves_beta_toward_truth():
+    """A range-correlated instrument bias (small apparent size reads low contrast,
+    and small apparent size also falls with range, within each marker's own track)
+    inflates the fitted beta. Correction with a k(px) measured ONLY in a fixed band
+    must remove most of that inflation, even though the band never sees beta.
+    """
+    beta_true = 0.3
+
+    def k_true(px):
+        # Matches the qualitative shape reported in the real data: small apparent
+        # sizes read low, saturating to 1.0 for large apparent sizes.
+        return np.clip(0.55 + 0.45 * (px - 40.0) / (170.0 - 40.0), 0.55, 1.0)
+
+    # Four marker "families" with distinct printed C0 (a_i) and distinct
+    # apparent-size-vs-range scales, spanning the full range, like the real board.
+    markers = {
+        201: {"a": 4.4, "scale": 30.0},
+        301: {"a": 4.3, "scale": 36.0},
+        302: {"a": 4.2, "scale": 60.0},
+        401: {"a": 4.5, "scale": 122.0},
+    }
+    rows = []
+    for mid, p in markers.items():
+        d = np.linspace(0.62, 3.0, 100)
+        px = p["scale"] / d
+        true_contrast = np.exp(p["a"] - beta_true * d)
+        observed = true_contrast * k_true(px)
+        rows.append(pd.DataFrame({
+            "marker_id": mid, "range_m": d, "apparent_px": px,
+            "white_r": observed + 40.0, "black_r": np.full(d.size, 40.0),
+        }))
+    samples = pd.concat(rows, ignore_index=True)
+
+    beta_raw, _, _ = T.fit_beta_fixed_effects(samples, "r")
+    k_px, k_val = T.measure_instrument_response(samples, "r", band=(0.62, 0.88))
+    beta_corrected, _, _ = T.fit_beta_fixed_effects(samples, "r", k=(k_px, k_val))
+    assert beta_raw > beta_true + 0.02, "the fixture must actually be biased"
+    assert abs(beta_corrected - beta_true) < abs(beta_raw - beta_true)

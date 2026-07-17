@@ -129,6 +129,99 @@ def fit_veiling(d, black, beta):
     return B, _r2(y[ok], B * x[ok])
 
 
+def measure_instrument_response(samples, channel, band=(0.62, 0.88)):
+    """Measure the instrument's response k(apparent_px) in a fixed range band.
+
+    In `band` every marker sees the same water, so at fixed range contrast MUST be
+    independent of apparent size; any dependence found here is the instrument's own
+    response (blur compressing a small marker's black ring and white sheet together),
+    not beta. Grouping is by marker id, so this is calibrated at fixed range and never
+    sees beta, which is what makes it a correction rather than a fit against the thing
+    it corrects.
+
+    Returns (k_px, k_val), sorted by apparent px ascending, with k_val normalised so
+    the group with the largest median apparent_px reads 1.0.
+    """
+    sub = samples.dropna(subset=[f"white_{channel}", f"black_{channel}",
+                                 "range_m", "apparent_px", "marker_id"])
+    sub = sub[(sub["range_m"] >= band[0]) & (sub["range_m"] <= band[1])]
+    contrast = sub[f"white_{channel}"] - sub[f"black_{channel}"]
+    grouped = pd.DataFrame({"marker_id": sub["marker_id"],
+                            "apparent_px": sub["apparent_px"],
+                            "contrast": contrast}).groupby("marker_id").median()
+    grouped = grouped.sort_values("apparent_px")
+    k_px = grouped["apparent_px"].to_numpy()
+    k_raw = grouped["contrast"].to_numpy()
+    norm = k_raw[np.argmax(k_px)]
+    k_val = k_raw / norm
+    return k_px, k_val
+
+
+def apply_instrument_response(apparent_px, k_px, k_val):
+    """Interpolate the instrument response k(apparent_px) at arbitrary apparent sizes.
+
+    Uses np.interp, which clamps outside the calibrated range (returns k_val at the
+    nearest end of k_px for anything smaller or larger). That clamping is correct
+    here: the response was only ever measured across the apparent sizes seen in the
+    calibration band, and holding it flat beyond that range is the conservative
+    choice rather than extrapolating into unmeasured behaviour.
+    """
+    return np.interp(np.asarray(apparent_px, dtype=float), k_px, k_val)
+
+
+def fit_beta_fixed_effects(samples, channel, k=None):
+    """Fit log(contrast_ij) = a_i - beta * d_ij, one intercept a_i per marker id,
+    one shared slope beta, by linear least squares with marker dummy columns.
+
+    This removes each marker's own C0 (printed contrast, sheet, local lighting)
+    without letting those differences contaminate the shared beta, unlike a single
+    pooled intercept.
+
+    If k is given as (k_px, k_val), every sample's contrast is first divided by its
+    interpolated instrument response before the fit, correcting the range-correlated
+    bias that k(px) measures. Non-positive contrast (after correction) is dropped
+    before the log, same as fit_beta.
+
+    Returns (beta, r2, intercepts_by_id) where intercepts_by_id maps marker id to
+    exp(a_i), i.e. the corrected C0 in contrast units, and r2 is reported in log
+    space over the samples that survived the drop.
+    """
+    sub = samples.dropna(subset=[f"white_{channel}", f"black_{channel}",
+                                 "range_m", "marker_id"])
+    contrast = (sub[f"white_{channel}"] - sub[f"black_{channel}"]).to_numpy(dtype=float)
+    d = sub["range_m"].to_numpy(dtype=float)
+    ids = sub["marker_id"].to_numpy()
+
+    if k is not None:
+        k_px, k_val = k
+        resp = apply_instrument_response(sub["apparent_px"].to_numpy(), k_px, k_val)
+        contrast = contrast / resp
+
+    ok = np.isfinite(d) & np.isfinite(contrast) & (contrast > 0)
+    if ok.sum() < 2:
+        return float("nan"), float("nan"), {}
+
+    d_ok = d[ok]
+    y = np.log(contrast[ok])
+    ids_ok = ids[ok]
+    uniq_ids = sorted(set(ids_ok))
+
+    n = len(d_ok)
+    X = np.zeros((n, len(uniq_ids) + 1))
+    for col, mid in enumerate(uniq_ids):
+        X[:, col] = (ids_ok == mid).astype(float)
+    X[:, -1] = -d_ok
+
+    coeffs, *_ = np.linalg.lstsq(X, y, rcond=None)
+    intercepts = coeffs[:-1]
+    beta = float(coeffs[-1])
+    yhat = X @ coeffs
+    r2 = _r2(y, yhat)
+    intercepts_by_id = {int(mid): float(np.exp(a)) for mid, a in
+                        zip(uniq_ids, intercepts)}
+    return beta, r2, intercepts_by_id
+
+
 def measure_beta(samples):
     """Per-channel beta from the black/white contrast decay across the sample set."""
     rows = []
