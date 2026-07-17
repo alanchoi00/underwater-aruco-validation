@@ -14,6 +14,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.patches import Polygon
 
 from analysis import detect, geometry as g, layout as L
 from analysis import metrics as M, turbidity as T, vizstyle
@@ -617,6 +618,117 @@ def crossval(samples, beta_map, responses, summary):
     return cv
 
 
+SWEEP_STRIP_FRAME = 197              # all 9 markers present, 7/9 detected at m=0,
+                                      # median range 1.38 m: the strip isolates water
+SWEEP_STRIP_MULTIPLIERS = [0.0, 1.0, 2.0, 4.0, 8.0]
+SWEEP_STRIP_CROP_MARGIN = 0.15
+SWEEP_STRIP_DETECTED_COLOR = "#1a9850"
+SWEEP_STRIP_MISSED_COLOR = "#c0392b"
+
+
+def _board_crop_box(mask, margin=SWEEP_STRIP_CROP_MARGIN):
+    """Bounding box of the True pixels in `mask`, expanded by `margin` of its own size.
+
+    Returns (x0, x1, y0, y1), clipped to the mask's own shape, for a fixed crop that
+    can be reused across every synthesised panel of the same frame.
+    """
+    ys, xs = np.nonzero(mask)
+    x0, x1 = int(xs.min()), int(xs.max())
+    y0, y1 = int(ys.min()), int(ys.max())
+    mx = int(round((x1 - x0) * margin))
+    my = int(round((y1 - y0) * margin))
+    h, w = mask.shape[:2]
+    return (max(0, x0 - mx), min(w, x1 + mx + 1),
+           max(0, y0 - my), min(h, y1 + my + 1))
+
+
+def figure_sweep_strip(dataset_dir, poses, lay, Km, ci, beta_map, B_map, summary,
+                       frame_idx=SWEEP_STRIP_FRAME):
+    """Figure 1, a five-panel strip: the same frame, synthesised at multipliers
+    0/1/2/4/8, so a reader can see what "tau" means instead of only reading it off a
+    curve. Frame 197 has all 9 board markers and 7/9 detected at multiplier 0, so what
+    changes across the strip is the water, not the framing; every panel uses the SAME
+    crop, from the frame's own board pose, so the comparison is like for like.
+
+    Each marker is outlined from its PROJECTED pose corners, not its detected corners,
+    so a marker the detector misses still gets an outline (red); a detected marker's
+    outline is green. That is what makes the strip a diagnostic and not just a picture:
+    it is the same 9 outlines every panel, only their colour and the water changing.
+
+    This figure is also where the veiling light B's incoherence (see the limitations
+    entry: B_green fits at 241.9 DN, brighter than the white sheet is ever observed,
+    about 144 to 154 DN) becomes visible rather than a number in a table. At high
+    multiplier every degraded pixel is pulled toward B, so if B is implausibly bright
+    the panel should look implausibly washed out; if it still reads as murky water,
+    that is evidence the model's insensitivity to B (contrast is B-free by
+    construction) is doing the work the docstring in turbidity.py claims for it.
+    """
+    rv, tv = poses[frame_idx]
+    shape = (ci["height"], ci["width"])
+    depth = T.plane_depth_map(lay, rv, tv, Km, shape)
+    mask = T.board_mask(lay, rv, tv, Km, shape)
+    x0, x1, y0, y1 = _board_crop_box(mask)
+
+    beta_vec = np.array([beta_map["b"], beta_map["g"], beta_map["r"]])
+    B_vec = np.array([B_map["b"], B_map["g"], B_map["r"]])
+    beta_grey = beta_map["grey"]
+
+    rng = T.marker_ranges(lay, rv, tv)
+    median_range = float(np.median(list(rng.values())))
+
+    Xb = g.board_pts(lay, np.array([g.IDX[mid] for mid in g.IDS]))
+    corners_px = g.project(Xb, np.array([rv]), np.array([tv]),
+                           np.zeros(len(g.IDS), dtype=int),
+                           float(Km[0, 0]), float(Km[1, 1]),
+                           float(Km[0, 2]), float(Km[1, 2]))
+
+    img_path = os.path.join(dataset_dir, RUN, "frames", f"{frame_idx:06d}.png")
+    img = cv2.imread(img_path)
+    if img is None:
+        raise FileNotFoundError(img_path)
+
+    detector = detect.make_detector()
+    # Size the figure to the crop's own aspect ratio, not a fixed guess: the board
+    # crop is much wider than tall, and a fixed height left most of the figure blank
+    # above the panels.
+    fig_w = vizstyle.WIDE_W * 1.8
+    panel_w = fig_w / len(SWEEP_STRIP_MULTIPLIERS)
+    panel_h = panel_w * (y1 - y0) / (x1 - x0)
+    fig_h = panel_h + 0.7           # + per-panel title, suptitle, margins
+    fig, axes = plt.subplots(1, len(SWEEP_STRIP_MULTIPLIERS), figsize=(fig_w, fig_h))
+    detected_by_m = {}
+    for ax, m in zip(axes, SWEEP_STRIP_MULTIPLIERS):
+        syn = T.synthesise(img, depth, mask, B_vec, m * beta_vec)
+        gray = cv2.cvtColor(syn, cv2.COLOR_BGR2GRAY)
+        detected_ids = {d["marker_id"] for d in detect.detect_frame(gray, detector)}
+        n_detected = len(detected_ids & set(g.IDS))
+        detected_by_m[m] = n_detected
+
+        crop = cv2.cvtColor(syn[y0:y1, x0:x1], cv2.COLOR_BGR2RGB)
+        ax.imshow(crop)
+        for i, mid in enumerate(g.IDS):
+            poly = corners_px[i].copy()
+            poly[:, 0] -= x0
+            poly[:, 1] -= y0
+            colour = (SWEEP_STRIP_DETECTED_COLOR if mid in detected_ids
+                     else SWEEP_STRIP_MISSED_COLOR)
+            ax.add_patch(Polygon(poly, closed=True, fill=False, edgecolor=colour,
+                                 linewidth=0.9))
+        tau = (1.0 + m) * beta_grey * median_range
+        ax.set_title(f"m={int(m)}, tau {tau:.1f}, {n_detected}/9 detected", fontsize=7)
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.suptitle(f"Frame {frame_idx}, board median range {median_range:.2f} m: "
+                 "synthesised turbidity", fontsize=8, y=0.995)
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.87])
+    vizstyle.save(fig, "synthesis_sweep_strip")
+
+    summary["sweep_strip_frame"] = int(frame_idx)
+    summary["sweep_strip_median_range_m"] = round(median_range, 3)
+    summary["sweep_strip_detected_of_9_by_multiplier"] = {
+        str(m): int(n) for m, n in detected_by_m.items()}
+
+
 def main(dataset_dir="dataset"):
     vizstyle.apply()
     os.makedirs("results", exist_ok=True)
@@ -687,6 +799,9 @@ def main(dataset_dir="dataset"):
             [[r.c0x, r.c0y], [r.c1x, r.c1y], [r.c2x, r.c2y], [r.c3x, r.c3y]])
 
     B_map = dict(zip(veil.channel, veil.B))
+
+    figure_sweep_strip(dataset_dir, poses, lay, Km, ci, beta_map, B_map, summary)
+
     pred, sweep_df, trials_df = sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map,
                                       B_map, summary)
     pred.to_csv("results/turbidity_trials.csv", index=False)
