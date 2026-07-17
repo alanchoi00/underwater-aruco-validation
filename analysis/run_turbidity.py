@@ -96,9 +96,10 @@ def figure_beta(samples, responses):
                 label=f"{ch}: beta={beta:.3f}/m, r2={r2:.2f}")
     ax.set_yscale("log")
     ax.set_xlabel("range (m, from board pose)")
-    ax.set_ylabel("instrument-corrected black/white contrast (DN)")
-    ax.set_title("Contrast decay: fixed-effects fit, instrument-corrected")
+    ax.set_ylabel("corrected black/white contrast (DN)")
+    ax.set_title("Contrast decay: corrected fit", fontsize=9)
     ax.legend(fontsize=6, loc="lower left")
+    fig.tight_layout()
     vizstyle.save(fig, "beta_contrast_decay")
 
 
