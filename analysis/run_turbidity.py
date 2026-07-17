@@ -514,6 +514,73 @@ def figure_px_required(trials, fx, summary):
     summary["sizing"] = sizing
 
 
+def crossval(samples, beta_map, responses, summary):
+    """Predict a far sample's contrast from a near one, using only the measured beta.
+
+    Same marker id, so J is identical; only the water between differs. The prediction is
+        contrast_far = contrast_near * exp(-beta * (d_far - d_near))
+    which is the model with nothing else in it. Pairs are drawn across every marker with a
+    wide enough range span, and the distribution is what gets reported: one pair agreeing
+    proves nothing.
+
+    Every sample's contrast is also divided by its instrument response k(apparent_px)
+    before forming the corrected prediction. Apparent size falls with range, so the far
+    sample of any pair is systematically under-read by the sampler (blur compresses the
+    black ring against the white sheet as the border cell approaches the blur width, down
+    to k about 0.816 at 42 px versus 1.000 at 170 px). Left uncorrected this reads as the
+    model over-predicting, when the defect is the sampler under-measuring, not beta. Both
+    the raw and the corrected distributions are reported; the difference between them is
+    itself evidence about the correction.
+    """
+    rows = []
+    for mid, sub in samples.groupby("marker_id"):
+        sub = sub.sort_values("range_m")
+        if len(sub) < 4:
+            continue
+        near = sub.iloc[:max(1, len(sub) // 4)]
+        far = sub.iloc[-max(1, len(sub) // 4):]
+        for _, a in near.iterrows():
+            for _, b in far.iterrows():
+                dd = b.range_m - a.range_m
+                if dd < 0.5:
+                    continue
+                for ch in T.CHANNELS:
+                    c_near = a[f"white_{ch}"] - a[f"black_{ch}"]
+                    c_far = b[f"white_{ch}"] - b[f"black_{ch}"]
+                    if c_near <= 0 or c_far <= 0:
+                        continue
+                    pred = c_near * np.exp(-beta_map[ch] * dd)
+                    rel_err = (pred - c_far) / c_far
+
+                    k_px, k_val = responses[ch]
+                    k_near = T.apply_instrument_response(a.apparent_px, k_px, k_val)
+                    k_far = T.apply_instrument_response(b.apparent_px, k_px, k_val)
+                    c_near_corr = c_near / k_near
+                    c_far_corr = c_far / k_far
+                    pred_corr = c_near_corr * np.exp(-beta_map[ch] * dd)
+                    rel_err_corr = (pred_corr - c_far_corr) / c_far_corr
+
+                    rows.append({"marker_id": int(mid), "channel": ch,
+                                 "d_near": a.range_m, "d_far": b.range_m,
+                                 "px_near": a.apparent_px, "px_far": b.apparent_px,
+                                 "pred": pred, "actual": c_far, "rel_err": rel_err,
+                                 "pred_corrected": pred_corr,
+                                 "actual_corrected": c_far_corr,
+                                 "rel_err_corrected": rel_err_corr})
+    cv = pd.DataFrame(rows)
+    cv.to_csv("results/turbidity_crossval.csv", index=False)
+
+    def dist(col):
+        return {ch: {"n": int((cv.channel == ch).sum()),
+                     "median_rel_err": round(float(cv[cv.channel == ch][col].median()), 3),
+                     "p10": round(float(cv[cv.channel == ch][col].quantile(0.10)), 3),
+                     "p90": round(float(cv[cv.channel == ch][col].quantile(0.90)), 3)}
+                for ch in T.CHANNELS if (cv.channel == ch).any()}
+
+    summary["crossval"] = {"raw": dist("rel_err"), "corrected": dist("rel_err_corrected")}
+    return cv
+
+
 def main(dataset_dir="dataset"):
     vizstyle.apply()
     os.makedirs("results", exist_ok=True)
@@ -620,6 +687,31 @@ def main(dataset_dir="dataset"):
 
     summary["beta_grey_used"] = beta_map["grey"]
     figure_px_required(trials_df, ci["fx"], summary)
+
+    crossval(samples, beta_map, responses, summary)
+
+    summary["limitations"] = [
+        "The pool is already in every frame: multiplier 0 is tau about 0.25 to 1.65 by "
+        "range, not clear water. tau_total is the honest axis, not added turbidity.",
+        "Veiling B fits at r2 about 0.5. It sets only the DC level, which adaptive "
+        "thresholding largely rejects, but at extreme tau contrast approaches "
+        "quantisation and the model degrades.",
+        "Synthesis is not new imagery: the turbidity levels from one frame are "
+        "correlated samples, so the Wilson intervals here understate the true "
+        "uncertainty across levels.",
+        "Motion blur is present in the source frames (hand-held capture) and is not "
+        "modelled.",
+        "beta was fitted over the measured range span only; extrapolating tau beyond it "
+        "assumes beta is constant with range.",
+        "One pool, one session. The tau axis generalises; this water does not.",
+        "The background outside the board mask is not degraded, so a synthesised frame "
+        "is physically incoherent away from the board. ArUco thresholds locally against "
+        "the sheet, which IS degraded, so this does not reach the decision.",
+        "The pixel budget's apparent variation with tau in figure_px_required is "
+        "sub-bin and not resolvable: every tau 0.18 to 1.75 point falls inside the "
+        "single px bin interval [24.5, 33.0], 8.5 px wide, so no trend should be read "
+        "from it beyond flatness up to tau 1.30 and collapse above tau 2.",
+    ]
 
     with open("results/turbidity_summary.json", "w") as f:
         json.dump(summary, f, indent=2, sort_keys=True)
