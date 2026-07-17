@@ -71,6 +71,62 @@ def test_fit_veiling_recovers_a_known_B():
     assert r2 > 0.999
 
 
+def test_fit_beta_r2_drops_with_real_scatter():
+    """r2 must actually measure fit quality, not just report a number close to 1.
+
+    The two fixtures above put points almost exactly on the true curve, so a stubbed
+    _r2 that always returns 1.0 would pass them unnoticed. Here the contrast carries
+    real multiplicative noise around the true decay, so a genuine r2 lands well below
+    1 and well above 0. The band is wide enough to tolerate a different but reasonable
+    RNG draw, and tight enough that a hardcoded 1.0 (or a near-1.0 stub) fails it.
+    """
+    rng = np.random.default_rng(42)
+    d = np.linspace(0.5, 4.0, 40)
+    contrast = 120.0 * np.exp(-0.4 * d) * np.exp(rng.normal(0.0, 0.3, size=d.size))
+    _, _, r2 = T.fit_beta(d, contrast)
+    assert 0.5 < r2 < 0.95, r2
+
+
+def test_fit_beta_r2_is_near_zero_for_unrelated_data():
+    """Pins the low end: contrast with no exponential relationship to range at all
+    must not report a high r2. This is the case a stubbed _r2 = 1.0 gets most wrong."""
+    rng = np.random.default_rng(1)
+    d = np.linspace(0.5, 4.0, 40)
+    contrast = rng.uniform(50.0, 150.0, size=d.size)
+    _, _, r2 = T.fit_beta(d, contrast)
+    assert r2 < 0.2, r2
+
+
+def test_fit_beta_r2_matches_the_log_space_definition():
+    """fit_beta reports r2 in log space (see its docstring), computed on log(contrast)
+    against the fitted line, not on contrast itself in linear space. With noise-free
+    fixtures the two spaces are indistinguishable because every point sits on the
+    curve; here real scatter makes them diverge, so this test can actually tell them
+    apart, and pins the function to the log-space definition specifically.
+    """
+    rng = np.random.default_rng(3)
+    d = np.linspace(0.5, 4.0, 40)
+    contrast = 120.0 * np.exp(-0.4 * d) * np.exp(rng.normal(0.0, 0.3, size=d.size))
+    beta, c0, r2 = T.fit_beta(d, contrast)
+
+    y = np.log(contrast)
+    yhat_log = -beta * d + np.log(c0)
+    ss_res = np.sum((y - yhat_log) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    expected_log_r2 = 1.0 - ss_res / ss_tot
+
+    c_hat = c0 * np.exp(-beta * d)
+    ss_res_lin = np.sum((contrast - c_hat) ** 2)
+    ss_tot_lin = np.sum((contrast - np.mean(contrast)) ** 2)
+    expected_lin_r2 = 1.0 - ss_res_lin / ss_tot_lin
+
+    # The two spaces must disagree enough here for the comparison below to mean
+    # anything; if they converged this assertion catches the fixture, not the code.
+    assert abs(expected_log_r2 - expected_lin_r2) > 0.1
+
+    assert r2 == pytest.approx(expected_log_r2, abs=1e-9)
+
+
 def test_measure_beta_is_per_channel_and_red_dies_fastest():
     d = np.linspace(0.6, 3.0, 50)
     truth = {"b": 0.33, "g": 0.29, "r": 0.53, "grey": 0.31}
