@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from analysis import geometry as g
+from analysis.detect import apparent_size_px
 
 CHANNELS = ("b", "g", "r", "grey")
 
@@ -238,9 +239,16 @@ def synthesise(img, depth, mask, B, dbeta):
     return np.clip(np.rint(out), 0, 255).astype(np.uint8)
 
 
-def _profile(gray, p, direction, reach_px, step=0.25):
-    """Bilinear intensity samples along a ray, from -reach to +reach about p."""
-    ts = np.arange(-reach_px, reach_px + step, step)
+def _profile(gray, p, direction, reach_out, reach_in, step=0.25):
+    """Bilinear intensity samples along a ray, from -reach_in to +reach_out about p.
+
+    `direction` must be the outward normal, so negative t moves inward (into the
+    marker) and positive t moves outward (into the surrounding sheet). The two reaches
+    differ on purpose: outward runs into clean white sheet and can go far, inward must
+    stay inside the marker's one-cell-wide black border, or the profile picks up the
+    data area behind it (see edge_width).
+    """
+    ts = np.arange(-reach_in, reach_out + step, step)
     pts = p[None, :] + ts[:, None] * direction[None, :]
     h, w = gray.shape[:2]
     if (pts[:, 0].min() < 0 or pts[:, 0].max() > w - 2
@@ -253,8 +261,19 @@ def _profile(gray, p, direction, reach_px, step=0.25):
     return ts, vals
 
 
-def _rise_10_90(ts, vals):
-    """Distance between the 10% and 90% crossings of a monotone-ish step profile."""
+def _rise_10_90(ts, vals, reversal_tol=0.15):
+    """Distance between the 10% and 90% crossings of a monotone-ish step profile.
+
+    Rejects (returns nan for) a profile that is not a clean single step, such as the
+    white-black-white hump produced when the inward reach spills past the marker's
+    black border into its data area. The discriminator is the ratio of total
+    variation (sum of |diffs|) to net variation (|end - start|) of the normalised
+    profile: a clean step has TV approx equal to its net rise, while a hump adds a
+    second excursion that inflates TV well beyond the net change. reversal_tol=0.15
+    allows 15% of extra TV for sampling noise and anti-aliasing, which is generous
+    against real single-step profiles but far below the roughly 2x TV a genuine
+    double edge produces.
+    """
     lo, hi = float(np.min(vals)), float(np.max(vals))
     if hi - lo < 20.0:
         return float("nan")
@@ -262,6 +281,12 @@ def _rise_10_90(ts, vals):
     t10 = _crossing(ts, norm, 0.10)
     t90 = _crossing(ts, norm, 0.90)
     if t10 is None or t90 is None:
+        return float("nan")
+    net = abs(float(norm[-1]) - float(norm[0]))
+    if net < 1e-9:
+        return float("nan")
+    tv = float(np.sum(np.abs(np.diff(norm))))
+    if tv > net * (1.0 + reversal_tol):
         return float("nan")
     return abs(t90 - t10)
 
@@ -286,9 +311,23 @@ def edge_width(gray, corners, n_samples=16, reach_px=8.0):
     interpolation kernel as if it were the water. Samples several points along each of the
     four edges, crossing outward along the edge normal, and takes the median so a single
     occluded or clipped sample cannot set the answer.
+
+    The marker's black border is one cell wide (a 7x7 grid), so a symmetric reach_px
+    on both sides of the boundary contaminates small markers: at 40 px apparent size a
+    cell is 5.71 px, and an 8 px inward reach lands 1.4 cells in, past the border and
+    into the data area, producing a spurious white-black-white profile instead of a
+    single step. The outward direction has no such limit, since it runs into clean
+    white sheet. So the reach is asymmetric: outward stays at reach_px, inward is
+    capped at 0.45 of the marker's own cell size, computed from its own corners, to
+    stay well inside the border cell. That reduces contamination but the border is
+    anti-aliased and the physical board is printed at 95.9% of nominal scale, so a
+    residual hump can still reach a sample; _rise_10_90 detects and rejects it
+    directly rather than trusting the reach bound alone.
     """
     c = np.asarray(corners, dtype=float)
     centre = c.mean(axis=0)
+    cell = apparent_size_px(c) / 7.0
+    reach_in = min(reach_px, 0.45 * cell)
     widths = []
     for i in range(4):
         a, b = c[i], c[(i + 1) % 4]
@@ -302,7 +341,7 @@ def edge_width(gray, corners, n_samples=16, reach_px=8.0):
             normal = -normal  # always point outward, away from the marker
         for f in np.linspace(0.25, 0.75, n_samples // 4 + 1):
             p = a + f * edge
-            ts, vals = _profile(gray, p, normal, reach_px)
+            ts, vals = _profile(gray, p, normal, reach_px, reach_in)
             if ts is None:
                 continue
             w = _rise_10_90(ts, vals)
