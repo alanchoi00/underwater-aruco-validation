@@ -140,6 +140,75 @@ def figure_edge_width(samples, beta_grey, summary):
     vizstyle.save(fig, "edge_width_vs_px")
 
 
+def instrument_response_table(samples):
+    """Stage 1b part 1: k(apparent_px) per channel, stacked into one table."""
+    rows = []
+    responses = {}
+    for ch in T.CHANNELS:
+        k_px, k_val = T.measure_instrument_response(samples, ch)
+        responses[ch] = (k_px, k_val)
+        for px, k in zip(k_px, k_val):
+            rows.append({"channel": ch, "apparent_px": round(float(px), 2),
+                         "k": round(float(k), 4)})
+    return pd.DataFrame(rows), responses
+
+
+def fixed_effects_beta_table(samples, responses):
+    """Stage 1b part 2: one shared slope beta, one intercept per marker id, fit both
+    without and with the instrument-response correction.
+
+    "raw" here is the fixed-effects fit itself (k=None): per-marker intercepts already
+    remove the inter-marker C0 differences (problem 2), so it is the fair baseline
+    against which the k(px) correction's effect on beta (problem 1, the
+    range-correlated instrument bias) can be judged on its own. A single pooled
+    intercept across all 9 markers conflates both problems at once and is not a clean
+    comparison; it stays available separately in turbidity_beta.csv for continuity
+    with the earlier stage.
+    """
+    rows = []
+    for ch in T.CHANNELS:
+        sub = samples.dropna(subset=[f"white_{ch}", f"black_{ch}", "range_m",
+                                     "apparent_px", "marker_id"])
+        beta_raw, r2_raw, _ = T.fit_beta_fixed_effects(sub, ch, k=None)
+        beta_corr, r2_corr, _ = T.fit_beta_fixed_effects(sub, ch, k=responses[ch])
+        rows.append({"channel": ch, "beta_raw": beta_raw, "r2_raw": r2_raw,
+                    "beta_corrected": beta_corr, "r2_corrected": r2_corr,
+                    "n": int(len(sub))})
+    return pd.DataFrame(rows)
+
+
+def per_marker_beta_table(samples, responses):
+    """Per marker id, per channel: raw beta (that marker's own contrast decay) versus
+    corrected beta (contrast divided by the instrument response), each fit
+    independently with fit_beta. Diagnostic detail behind the shared fixed-effects
+    beta, not a replacement for it: each row's beta comes from that single marker's
+    own range span, so it is noisier and its range span is narrower.
+    """
+    rows = []
+    for ch in T.CHANNELS:
+        k_px, k_val = responses[ch]
+        for mid, sub in samples.groupby("marker_id"):
+            sub = sub.dropna(subset=[f"white_{ch}", f"black_{ch}", "range_m",
+                                     "apparent_px"])
+            if len(sub) < 2:
+                continue
+            d = sub["range_m"].to_numpy()
+            contrast_raw = (sub[f"white_{ch}"] - sub[f"black_{ch}"]).to_numpy()
+            resp = T.apply_instrument_response(sub["apparent_px"].to_numpy(),
+                                               k_px, k_val)
+            contrast_corrected = contrast_raw / resp
+            beta_raw, _, r2_raw = T.fit_beta(d, contrast_raw)
+            beta_corr, _, r2_corr = T.fit_beta(d, contrast_corrected)
+            rows.append({"channel": ch, "marker_id": int(mid),
+                        "size_mm": float(sub["size_mm"].iloc[0]),
+                        "n": int(len(sub)),
+                        "range_lo_m": round(float(d.min()), 3),
+                        "range_hi_m": round(float(d.max()), 3),
+                        "beta_raw": beta_raw, "r2_raw": r2_raw,
+                        "beta_corrected": beta_corr, "r2_corrected": r2_corr})
+    return pd.DataFrame(rows)
+
+
 def main(dataset_dir="dataset"):
     vizstyle.apply()
     os.makedirs("results", exist_ok=True)
@@ -158,11 +227,32 @@ def main(dataset_dir="dataset"):
     veil = T.measure_veiling(samples, beta_map)
     betas.merge(veil, on="channel").to_csv("results/turbidity_beta.csv", index=False)
 
+    k_table, responses = instrument_response_table(samples)
+    k_table.to_csv("results/turbidity_k_px.csv", index=False)
+
+    fe = fixed_effects_beta_table(samples, responses)
+    fe_row = {r.channel: r for r in fe.itertuples()}
+
+    per_marker = per_marker_beta_table(samples, responses)
+    per_marker.to_csv("results/turbidity_beta_per_marker.csv", index=False)
+
     summary["n_samples"] = int(len(samples))
     summary["range_m"] = [round(float(samples.range_m.min()), 2),
                           round(float(samples.range_m.max()), 2)]
     summary["beta"] = {r.channel: {"beta": round(r.beta, 3), "r2": round(r.r2, 3)}
                        for r in betas.itertuples()}
+    summary["beta_fixed_effects"] = {
+        ch: {"raw": {"beta": round(fe_row[ch].beta_raw, 3),
+                    "r2": round(fe_row[ch].r2_raw, 3)},
+             "corrected": {"beta": round(fe_row[ch].beta_corrected, 3),
+                          "r2": round(fe_row[ch].r2_corrected, 3)},
+             "n": int(fe_row[ch].n)}
+        for ch in T.CHANNELS
+    }
+    summary["red_green_ratio_raw"] = round(
+        float(fe_row["r"].beta_raw / fe_row["g"].beta_raw), 3)
+    summary["red_green_ratio_corrected"] = round(
+        float(fe_row["r"].beta_corrected / fe_row["g"].beta_corrected), 3)
     summary["veiling_B"] = {r.channel: {"B": round(r.B, 1), "r2": round(r.r2, 3)}
                             for r in veil.itertuples()}
     summary["tau_at_5m_grey"] = round(float(beta_map["grey"] * 5.0), 2)
