@@ -350,6 +350,19 @@ def edge_width(gray, corners, n_samples=16, reach_px=8.0):
     return float(np.median(widths)) if widths else float("nan")
 
 
+def trials_at_tau(pred, detected_by_frame):
+    """Re-score a FIXED trial set against a degraded frame's detections.
+
+    detected_by_frame maps frame_idx -> set of detected marker ids. The trial set comes
+    from the original imagery and never moves, so the denominator is the same at every
+    optical depth and the rates across the sweep are directly comparable.
+    """
+    out = pred.copy()
+    out["detected"] = [int(mid in detected_by_frame.get(int(fi), ()))
+                       for fi, mid in zip(out["frame_idx"], out["marker_id"])]
+    return out.drop(columns=["present"])
+
+
 def marker_ranges(layout, rv, tv):
     """Euclidean range from the camera to each marker's centre, given the board pose."""
     R = g.rodrigues(np.asarray(rv, dtype=float)[None])[0]

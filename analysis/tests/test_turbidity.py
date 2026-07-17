@@ -426,3 +426,27 @@ def test_edge_width_recovers_the_gaussian_scale():
     for sigma in (1.5, 2.5):
         w = T.edge_width(*_blurred_square(sigma=sigma))
         assert w == pytest.approx(2.563 * sigma, rel=0.25), (sigma, w)
+
+
+def test_trials_at_tau_keeps_the_trial_set_and_rescores_the_outcome():
+    """The denominator must not move when the imagery degrades."""
+    pred = pd.DataFrame({
+        "frame_idx": [0, 0, 1, 1], "marker_id": [201, 301, 201, 301],
+        "size_mm": [149.4, 74.7, 149.4, 74.7], "pred_px": [90.0, 45.0, 80.0, 40.0],
+        "present": [1, 1, 1, 1],
+    })
+    out = T.trials_at_tau(pred, {0: {201}, 1: set()})
+    assert len(out) == len(pred), "trial count must be tau-invariant"
+    assert list(out.columns) == ["frame_idx", "marker_id", "size_mm", "pred_px",
+                                "detected"]
+    assert out.detected.tolist() == [1, 0, 0, 0]
+
+
+def test_trials_at_tau_scores_a_frame_with_no_detections_as_all_misses():
+    pred = pd.DataFrame({
+        "frame_idx": [7], "marker_id": [201], "size_mm": [149.4], "pred_px": [30.0],
+        "present": [1],
+    })
+    out = T.trials_at_tau(pred, {})
+    assert out.detected.tolist() == [0]
+    assert len(out) == 1

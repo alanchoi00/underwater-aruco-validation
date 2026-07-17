@@ -200,3 +200,28 @@ def test_rate_by_bin_reports_a_confidence_interval():
     row = m.rate_by_bin(t, bins=[28, 38]).iloc[0]
     assert row.ci_lo < row.rate < row.ci_hi
     assert 0.0 <= row.ci_lo and row.ci_hi <= 1.0
+
+
+def _synth_obs(layout, views, K):
+    """Project the full board through each pose, mirroring run_analysis.py:171-175."""
+    from analysis import geometry as gg
+    obs = {}
+    for fi, (rv, tv) in enumerate(views):
+        Xb = gg.board_pts(layout, np.arange(9))
+        px = gg.project(Xb, rv[None], tv[None], np.zeros(9, dtype=int), **K)
+        obs[(0, fi)] = {gg.IDS[i]: px[i] for i in range(9)}
+    return obs
+
+
+def test_detection_trials_is_predicted_trials_with_the_real_outcome(K, layout_true,
+                                                                    synth_views):
+    """The refactor must not move a single number in the existing metric."""
+    Km = np.array([[K["fx"], 0, K["cx"]], [0, K["fy"], K["cy"]], [0, 0, 1]])
+    obs = _synth_obs(layout_true, synth_views, K)
+    pred = m.predicted_trials(obs, layout_true, Km, 960, 540)
+    trials = m.detection_trials(obs, layout_true, Km, 960, 540)
+    assert list(trials.columns) == ["frame_idx", "marker_id", "size_mm", "pred_px",
+                                    "detected"]
+    assert len(pred) == len(trials)
+    assert np.array_equal(pred["present"].to_numpy(), trials["detected"].to_numpy())
+    assert np.allclose(pred["pred_px"], trials["pred_px"])
