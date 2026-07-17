@@ -16,6 +16,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from analysis import geometry as g
+
 CHANNELS = ("b", "g", "r", "grey")
 
 CANON_PX = 96          # marker side in the warped canonical view
@@ -146,3 +148,66 @@ def measure_veiling(samples, betas):
                             betas[ch])
         rows.append({"channel": ch, "B": B, "r2": r2, "n": int(len(sub))})
     return pd.DataFrame(rows)
+
+
+def plane_depth_map(layout, rv, tv, K, shape):
+    """Euclidean range from the camera to the board plane, per pixel.
+
+    The board is z = 0 in board coords, so the plane in camera coords has normal
+    R @ [0,0,1] and passes through tv. Each pixel's ray is s * Kinv @ [u,v,1]; solving
+    n . (s*ray - tv) = 0 gives s, and the range is the length of that ray.
+
+    This is geometric truth, not a monocular depth estimate, which is the main thing this
+    synthesis has that the published ones do not.
+    """
+    h, w = shape[:2]
+    R = g.rodrigues(np.asarray(rv, dtype=float)[None])[0]
+    n = R @ np.array([0.0, 0.0, 1.0])
+    t = np.asarray(tv, dtype=float)
+
+    u, v = np.meshgrid(np.arange(w, dtype=float), np.arange(h, dtype=float))
+    rays = np.stack([u, v, np.ones_like(u)], axis=-1) @ np.linalg.inv(K).T
+
+    denom = rays @ n
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s = float(n @ t) / denom
+    pts = rays * s[..., None]
+    d = np.linalg.norm(pts, axis=-1)
+    d[~np.isfinite(d) | (s <= 0) | (np.abs(denom) < 1e-12)] = np.nan
+    return d
+
+
+def board_mask(layout, rv, tv, K, shape, margin_m=0.04):
+    """Pixels covered by the physical board, as the marker bounding box plus a margin.
+
+    The margin exists because ArUco thresholds each pixel against its neighbours, so a
+    marker's white sheet is part of what makes it detectable and must be degraded with it.
+    The background beyond the board is left alone and is therefore physically incoherent;
+    it does not reach the detector's decision, but the driver reports the caveat.
+    """
+    h, w = shape[:2]
+    xy = np.concatenate([g.board_pts(layout, np.array([g.IDX[m]]))[0] for m in g.IDS])
+    lo = xy[:, :2].min(axis=0) - margin_m
+    hi = xy[:, :2].max(axis=0) + margin_m
+    quad = np.array([[lo[0], lo[1], 0.0], [hi[0], lo[1], 0.0],
+                     [hi[0], hi[1], 0.0], [lo[0], hi[1], 0.0]])
+    R = g.rodrigues(np.asarray(rv, dtype=float)[None])[0]
+    cam = quad @ R.T + np.asarray(tv, dtype=float)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    if np.any(cam[:, 2] <= 0):
+        return mask.astype(bool)
+    px = (cam[:, :2] / cam[:, 2:3]) @ np.array([[K[0, 0], 0], [0, K[1, 1]]]) \
+        + np.array([K[0, 2], K[1, 2]])
+    cv2.fillConvexPoly(mask, np.round(px).astype(np.int32), 1)
+    return mask.astype(bool)
+
+
+def marker_ranges(layout, rv, tv):
+    """Euclidean range from the camera to each marker's centre, given the board pose."""
+    R = g.rodrigues(np.asarray(rv, dtype=float)[None])[0]
+    t = np.asarray(tv, dtype=float)
+    out = {}
+    for mid in g.IDS:
+        c = g.board_pts(layout, np.array([g.IDX[mid]]))[0].mean(axis=0)
+        out[int(mid)] = float(np.linalg.norm(R @ c + t))
+    return out

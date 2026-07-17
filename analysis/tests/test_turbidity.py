@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from analysis import geometry as g
 from analysis import turbidity as T
 
 
@@ -139,3 +140,60 @@ def test_measure_beta_is_per_channel_and_red_dies_fastest():
         assert out.loc[ch, "beta"] == pytest.approx(bt, abs=1e-6)
         assert out.loc[ch, "n"] == 50
     assert out.loc["r", "beta"] > out.loc["g", "beta"]
+
+
+def _K_mat(K):
+    return np.array([[K["fx"], 0, K["cx"]], [0, K["fy"], K["cy"]], [0, 0, 1]])
+
+
+def test_plane_depth_is_the_range_at_the_principal_point_when_fronto_parallel(
+    K, layout_true
+):
+    """Fronto-parallel at 2 m: the centre pixel's ray is the optical axis, so its
+    Euclidean range to the plane is exactly 2 m."""
+    rv = np.zeros(3)
+    tv = np.array([0.0, 0.0, 2.0])
+    dm = T.plane_depth_map(layout_true, rv, tv, _K_mat(K), (540, 960))
+    # round, not int: cx = 483.78, so the pixel nearest the optical axis is 484.
+    # Truncating to 483 lands 0.78 px off-axis, which is 1.1e-6 of extra range and
+    # fails this tolerance.
+    assert dm[round(K["cy"]), round(K["cx"])] == pytest.approx(2.0, abs=1e-6)
+
+
+def test_plane_depth_grows_away_from_the_principal_point(K, layout_true):
+    """Off-axis rays travel further to reach the same fronto-parallel plane."""
+    dm = T.plane_depth_map(layout_true, np.zeros(3), np.array([0.0, 0.0, 2.0]),
+                           _K_mat(K), (540, 960))
+    centre = dm[round(K["cy"]), round(K["cx"])]
+    assert dm[round(K["cy"]), 10] > centre
+    assert np.all(dm[np.isfinite(dm)] >= centre - 1e-9)
+
+
+def test_plane_depth_is_nan_for_a_plane_behind_the_camera(K, layout_true):
+    dm = T.plane_depth_map(layout_true, np.zeros(3), np.array([0.0, 0.0, -2.0]),
+                           _K_mat(K), (540, 960))
+    assert np.all(np.isnan(dm))
+
+
+def test_board_mask_covers_the_markers_and_not_the_whole_frame(K, layout_true):
+    rv = np.zeros(3)
+    tv = np.array([-0.13, 0.05, 1.2])
+    Km = _K_mat(K)
+    mask = T.board_mask(layout_true, rv, tv, Km, (540, 960))
+    assert mask.any() and not mask.all()
+    # Every projected marker corner must fall inside the mask.
+    for mid in g.IDS:
+        px = g.project(g.board_pts(layout_true, np.array([g.IDX[mid]])),
+                       rv[None], tv[None], np.zeros(1, dtype=int),
+                       K["fx"], K["fy"], K["cx"], K["cy"])[0]
+        for u, v in px:
+            if 0 <= int(v) < 540 and 0 <= int(u) < 960:
+                assert mask[int(v), int(u)], f"marker {mid} corner outside mask"
+
+
+def test_marker_ranges_are_all_near_the_board_range(layout_true):
+    rv = np.zeros(3)
+    tv = np.array([0.0, 0.0, 2.0])
+    r = T.marker_ranges(layout_true, rv, tv)
+    assert set(r) == set(g.IDS)
+    assert all(1.9 < v < 2.2 for v in r.values()), r
