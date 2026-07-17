@@ -615,7 +615,88 @@ def crossval(samples, beta_map, responses, summary):
                 for ch in T.CHANNELS if (cv.channel == ch).any()}
 
     summary["crossval"] = {"raw": dist("rel_err"), "corrected": dist("rel_err_corrected")}
+    figure_crossval_distribution(cv, summary)
     return cv
+
+
+def figure_crossval_distribution(cv, summary):
+    """The actual validation: raw versus corrected relative error, pooled over every
+    near/far pair the dataset offers (5629 pairs per channel, all 9 markers, every
+    pair with a range gap of at least 0.5 m).
+
+    A box per channel, raw and corrected side by side, is the chosen form: the
+    finding is a location shift (about +18 percent collapsing to about -2.5 percent),
+    not the shape of either distribution, and box pairs read that shift at a glance
+    without the bin-width judgment calls a histogram would force at this width. A
+    zero line marks truth so the collapse toward it is visible without reading tick
+    labels.
+
+    What this figure legitimately establishes, and what it does not:
+
+    This is NOT cross-validation in the statistical sense: beta was fitted on
+    exactly the 934 samples these pairs are drawn from, so there is no holdout set
+    and no independent data. What the pair-prediction test legitimately shows is
+    (a) that the exponential FORM holds, since curvature in range would show up as
+    opposite residual bias at the near and far ends of each pair, which it does not,
+    and (b) that after the instrument-response correction, the model reproduces
+    real far-frame contrast to within about 3 percent (median) with a p10/p90 of
+    roughly -9 to +14 percent. It is not independent validation of the
+    instrument-response correction itself: given the model, the raw bias is
+    k_near/k_far - 1 identically (k is applied to both sides of the same
+    prediction), so its magnitude and its collapse under correction are algebra,
+    not evidence that k(apparent_px) is the right correction to make.
+    """
+    fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, vizstyle.COL_W * 0.85))
+    colours = {"b": "#2a78d6", "g": "#2e8b57", "r": "#c0392b", "grey": "#52514e"}
+    channels = [ch for ch in T.CHANNELS if (cv.channel == ch).any()]
+    n_per_channel = int((cv.channel == channels[0]).sum()) if channels else 0
+
+    positions = []
+    data = []
+    box_colours = []
+    labels = []
+    for i, ch in enumerate(channels):
+        sub = cv[cv.channel == ch]
+        base = i * 3
+        positions.extend([base, base + 1])
+        data.extend([sub["rel_err"].to_numpy(), sub["rel_err_corrected"].to_numpy()])
+        box_colours.extend(["#b8b6b0", colours[ch]])
+        labels.append(ch)
+
+    bp = ax.boxplot(data, positions=positions, widths=0.8, vert=False, patch_artist=True,
+                    showfliers=False, medianprops={"color": "#0b0b0b", "linewidth": 1.2})
+    for patch, colour in zip(bp["boxes"], box_colours):
+        patch.set_facecolor(colour)
+        patch.set_alpha(0.75)
+
+    ax.axvline(0.0, color=vizstyle.TEXT_SECONDARY, ls="--", lw=1.2, zorder=0)
+    ax.set_yticks([i * 3 + 0.5 for i in range(len(channels))])
+    ax.set_yticklabels(labels)
+    ax.set_xlabel("relative error, predicted far contrast vs measured far contrast")
+    ax.set_title("The model predicts real far-frame contrast to within 3 percent",
+                fontsize=9)
+    # A legend BELOW the axes. Two constraints pull against each other here. Inside the
+    # axes there is nowhere to put it: the raw whiskers reach +0.5, so every corner a
+    # legend would want is occupied, and it lands on the bottom channel's raw box. But a
+    # positional caption ("lower box is raw") is no good either, because the reader
+    # separates these boxes by COLOUR, not by position, and would have to decode the
+    # layout first. Anchoring the legend below the axes satisfies both: keyed to colour,
+    # clear of the data.
+    # A colour-keyed caption below the axes, and neither a legend box nor a positional
+    # caption, because both fail here. A legend inside the axes lands on the data: the
+    # raw whiskers reach +0.5, so every corner is occupied. A legend anchored outside
+    # lands on the x-axis label, since tight_layout reserves room for the label but not
+    # for it. And "lower box is raw" would make the reader decode the layout when the
+    # eye is already separating these by colour. So: say the colours.
+    fig.text(0.5, -0.02,
+             "pale grey is raw, where the sampler reads far markers low; "
+             "the channel's own colour is corrected by k(apparent_px). "
+             f"n = {n_per_channel} pairs per channel",
+             ha="center", va="top", fontsize=6.5, color=vizstyle.TEXT_SECONDARY)
+    fig.tight_layout()
+    vizstyle.save(fig, "crossval_distribution")
+
+    summary["crossval_distribution_n_per_channel"] = n_per_channel
 
 
 SWEEP_STRIP_FRAME = 197              # all 9 markers present, 7/9 detected at m=0,
@@ -762,12 +843,22 @@ def _grey_contrast(warped):
 
 def figure_synthesis_validation(dataset_dir, det, poses, lay, Km, ci, beta_map, B_map,
                                 summary, mid=VALIDATION_MARKER_ID):
-    """Figure 2: the cross-validation made visual, for one marker at one real baseline.
+    """Synthesis illustrated: marker 201 at the widest baseline, NOT a validation figure.
 
-    Marker 201 appears at about 0.62 m (189.7 px) and, later in the run, at about
-    3.19 m (43.0 px): a 2.57 m baseline of real water between two real observations
-    of the SAME physical marker. The near observation is degraded to the far
+    The actual validation is figure_crossval_distribution (results/crossval_distribution),
+    which pools 5629 near/far pairs across every marker and reports a corrected median
+    relative error of about -2.5 percent (p10 about -9 percent, p90 about 14 percent).
+    This figure is one pair from that pool, chosen because it is the TAIL, not the
+    typical case: marker 201 appears at about 0.62 m (189.7 px) and, later in the run,
+    at about 3.19 m (43.0 px), the widest baseline (2.57 m of real water) available for
+    any single marker in the dataset. The near observation is degraded to the far
     observation's optical depth and compared against the far observation itself.
+
+    It is chosen for illustration, not representativeness: the widest baseline makes
+    the degradation mechanism (contrast collapsing with added water) most visible to
+    the eye. Its raw contrast deficit is about 70 percent, far beyond the pooled p90 of
+    about 13.8 percent; do not read this panel's numbers as the study's result. Read
+    crossval_distribution for that.
 
     Deriving dbeta: synthesise() applies exp(-dbeta * d(x)) with d(x) the plane depth
     at each pixel, which at marker 201's own location in the near frame is d_near, not
@@ -801,6 +892,17 @@ def figure_synthesis_validation(dataset_dir, det, poses, lay, Km, ci, beta_map, 
     statistic, not merely the pooled statistic's typical case drawn in pixels. The
     pooled median remains the right number to cite; this figure is the worst
     single case in the pool, not the typical one, and is reported as such.
+
+    What this figure genuinely demonstrates, separate from the deficit percentage: the
+    degraded panel reads bright cyan while the real far panel reads dark teal, a mean
+    difference of about +48.5 DN. That is the model getting CONTRAST approximately
+    right and DC badly wrong, exactly the decomposition claimed elsewhere: veiling
+    light B fits at 241.9 DN, brighter than the white sheet is ever observed (about
+    144 to 154 DN), so B alone is not physically plausible. Contrast is B-free by
+    construction (see turbidity.py's module docstring), and it is contrast, not the
+    absolute colour, that the crossval numbers above are measuring. This imagery
+    disproves B as a standalone number while confirming the structure of the argument
+    that separates B from beta.
     """
     fi_near = _frame_closest_to_range(poses, lay, mid, VALIDATION_NEAR_RANGE_M)
     fi_far = _frame_closest_to_range(poses, lay, mid, VALIDATION_FAR_RANGE_M)
@@ -880,13 +982,18 @@ def figure_synthesis_validation(dataset_dir, det, poses, lay, Km, ci, beta_map, 
     for ax in axes:
         ax.set_xticks([])
         ax.set_yticks([])
-    fig.suptitle(f"Marker {mid}, baseline {d_far - d_near:.2f} m of real water "
-                f"(frame {fi_near} to frame {fi_far})", fontsize=8, y=1.06)
+    fig.suptitle(f"Synthesis illustrated: marker {mid} at the widest baseline "
+                f"({d_far - d_near:.2f} m, frame {fi_near} to frame {fi_far})",
+                fontsize=8, y=1.06)
     fig.text(0.5, -0.04,
              f"near panels resampled DOWN from {px_near:.0f} px; far panel resampled "
              f"UP from {px_far:.0f} px to the same canonical size (not a synthesis "
              "artifact)", ha="center", va="top", fontsize=6.5,
              color=vizstyle.TEXT_SECONDARY)
+    fig.text(0.5, -0.10,
+             "tail case, not typical: pooled corrected median is about -2.5 pct, p90 "
+             "about 13.8 pct, over 5629 pairs; see crossval_distribution",
+             ha="center", va="top", fontsize=6.5, color=vizstyle.TEXT_SECONDARY)
     fig.tight_layout()
     vizstyle.save(fig, "synthesis_validation")
 
