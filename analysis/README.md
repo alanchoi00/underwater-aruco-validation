@@ -26,6 +26,39 @@ instance in CI, where the stamp would otherwise fall back to `"unknown"`:
 
     ANALYSIS_GIT_SHA=$(git rev-parse --short HEAD) python analysis/run_analysis.py dataset/
 
+Turbidity is a second driver, answering a different question: how large must a marker be
+at range d in water of attenuation beta?
+
+    python analysis/run_turbidity.py dataset/
+
+It measures the pool's attenuation from the board's own black/white contrast decay (no
+dosing, no turbidity meter: two patches at the same range share a veiling term, so their
+difference is B-free and beta is a straight-line fit), then synthesises added turbidity
+onto the real frames and re-runs the real detector. The deliverable is
+`results/turbidity_sizing.csv`: the marker side needed at a given range and beta.
+
+Reading `results/turbidity_summary.json` first is worthwhile. It carries the fit quality
+(beta r2 0.705/0.672/0.877/0.746 for b/g/r/grey, veiling B r2 negative, between -0.57 and
+-2.72, which is why the synthesis never inverts the model) and the limitations of the
+method.
+
+The last step, `crossval`, is the check that matters most: everything above tests the
+code against itself (synthetic frames built from the same closed form the code
+implements), while this tests the model against reality. It takes a near sample and a
+far sample of the same marker id, so the printed contrast is identical and only the
+water between differs, and predicts the far contrast from the near one using nothing but
+the measured beta:
+
+    contrast_far = contrast_near * exp(-beta * (d_far - d_near))
+
+Both samples are also corrected for the instrument response before the ratio is formed
+(apparent size falls with range, and the sampler under-reads small markers, which would
+otherwise show up as the model over-predicting when the defect is measurement, not
+attenuation). `results/turbidity_crossval.csv` carries every pair; `summary["crossval"]`
+carries the raw and corrected relative-error distributions (n, median, p10, p90) per
+channel, both reported because the gap between them is itself evidence about the
+correction.
+
 ## Editing this code
 
 Open the repo in the devcontainer (`.devcontainer/devcontainer.json`, "Reopen in

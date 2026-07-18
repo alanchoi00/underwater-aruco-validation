@@ -160,8 +160,9 @@ def pose_error_vs_reference(obs_by_frame, layout, K):
         "frame_idx", "marker_id", "range_m", "trans_err_m", "rot_err_deg"])
 
 
-def detection_trials(obs_by_frame, layout, K, width, height):
-    """Per-frame, per-marker TRIALS -- hits AND misses -- keyed on predicted apparent size.
+def predicted_trials(obs_by_frame, layout, K, width, height):
+    """Per-frame, per-marker trial GEOMETRY -- which markers were fairly seeable, and at
+    what predicted apparent size.
 
     A detection rate needs the misses, but a detection table only records hits. The misses
     are recoverable: where other markers are detected the board pose is known, so a marker's
@@ -172,6 +173,11 @@ def detection_trials(obs_by_frame, layout, K, width, height):
 
     A trial only counts if the marker is FULLY inside the image. Centre-only would count a
     marker whose corners spill outside -- legitimately unseeable -- as a miss.
+
+    `present` is the outcome in the ORIGINAL imagery. It is split from the geometry because
+    the turbidity synthesis re-scores the outcome on degraded frames while holding this
+    trial set fixed. Re-deriving the geometry from degraded frames would shrink the
+    denominator exactly where detection fails, so the rate would never fall.
     """
     from analysis import layout as L        # local import avoids a circular import
 
@@ -198,9 +204,18 @@ def detection_trials(obs_by_frame, layout, K, width, height):
                                   for i in range(4)]))
             rows.append({"frame_idx": int(fi), "marker_id": int(mid),
                          "size_mm": round(g.SIZES[mid] * 1000, 1),
-                         "pred_px": side, "detected": int(mid in board)})
+                         "pred_px": side, "present": int(mid in board)})
     return pd.DataFrame(rows, columns=["frame_idx", "marker_id", "size_mm",
-                                       "pred_px", "detected"])
+                                       "pred_px", "present"])
+
+
+def detection_trials(obs_by_frame, layout, K, width, height):
+    """Per-frame, per-marker TRIALS -- hits AND misses -- keyed on predicted apparent size.
+
+    The trial geometry with its own imagery's outcome. See predicted_trials.
+    """
+    t = predicted_trials(obs_by_frame, layout, K, width, height)
+    return t.rename(columns={"present": "detected"})
 
 
 def _wilson(k, n, z=1.96):
