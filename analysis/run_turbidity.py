@@ -69,15 +69,12 @@ def collect_samples(dataset_dir, det, poses, lay):
 def figure_beta(samples, responses):
     """Plot the authoritative fixed-effects, instrument-corrected beta fit.
 
-    measure_beta's pooled fit is NOT plotted here: it is superseded (about 19% biased
-    high, and it conflates each marker's own intercept with the shared slope), and an
-    earlier version of this figure plotted it anyway, so the figure contradicted the
-    beta table it sits next to. Both the scatter and the curve below are
-    instrument-corrected (divided by k(apparent_px)) and fit with
+    measure_beta's pooled fit is superseded and NOT plotted here. Both the scatter and
+    the curve are instrument-corrected (divided by k(apparent_px)) and fit with
     fit_beta_fixed_effects, the same call that produces beta_fixed_effects in
-    turbidity_summary.json, so the numbers in the legend match that table exactly.
-    The plotted intercept is the median of the per-marker intercepts from that fit,
-    since fixed effects gives one per marker id and this figure draws one line.
+    turbidity_summary.json, so the legend matches that table exactly. The plotted
+    intercept is the median of the per-marker intercepts from that fit, since fixed
+    effects gives one per marker id and this figure draws one line.
     """
     fig, ax = plt.subplots(figsize=(vizstyle.COL_W, vizstyle.COL_W * 0.75))
     colours = {"b": "#2a78d6", "g": "#2e8b57", "r": "#c0392b", "grey": "#52514e"}
@@ -112,16 +109,15 @@ def figure_edge_width(samples, beta_grey, summary):
     """Stage 2, compared ONLY at matched apparent size.
 
     A global fit of edge width against tau, pooled across marker sizes, would be
-    CONFOUNDED and must not be shipped. Apparent size and tau are both set by range, and
-    edge width is biased by apparent size because edge_width bounds its inward reach to
-    0.45 of the border cell, which truncates the rise on small markers. Measured on the
-    real frames after that fix, edge width RISES with apparent size (2.10 px at 30-40 px
-    to 4.04 px at 100-300 px). A pooled tau fit would report that truncation as physics.
+    CONFOUNDED and must not be shipped: apparent size and tau are both set by range,
+    and edge width is biased by apparent size because edge_width bounds its inward
+    reach to 0.45 of the border cell, which truncates the rise on small markers. A
+    pooled tau fit would report that truncation as physics.
 
     Within one apparent-size bin the bound is identical for every marker, so the
-    truncation is identical too, while the 149.4 mm marker sits at 149.4/35.6 = 4.2x the
-    optical depth of the 35.6 mm one. Any difference INSIDE a bin is therefore tau, not
-    an artifact. That is the only comparison this figure makes.
+    truncation is identical too, while different marker sizes at the same apparent
+    size sit at different real optical depth. Any difference INSIDE a bin is
+    therefore tau, not an artifact. That is the only comparison this figure makes.
     """
     s = samples.dropna(subset=["edge_px"]).copy()
     s["tau"] = beta_grey * s.range_m
@@ -178,12 +174,9 @@ def fixed_effects_beta_table(samples, responses):
     without and with the instrument-response correction.
 
     "raw" here is the fixed-effects fit itself (k=None): per-marker intercepts already
-    remove the inter-marker C0 differences (problem 2), so it is the fair baseline
-    against which the k(px) correction's effect on beta (problem 1, the
-    range-correlated instrument bias) can be judged on its own. A single pooled
-    intercept across all 9 markers conflates both problems at once and is not a clean
-    comparison; it stays available separately in turbidity_beta.csv for continuity
-    with the earlier stage.
+    remove the inter-marker C0 differences, so it is the fair baseline against which
+    the k(px) correction's effect on beta can be judged on its own. A single pooled
+    intercept across all markers would conflate both effects at once.
     """
     rows = []
     for ch in T.CHANNELS:
@@ -237,9 +230,10 @@ PX_BINS = [8, 12, 16, 21, 28, 38, 52, 72, 100, 140, 200, 300]
 def sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map, B_map, summary):
     """Stage 4: per frame, per added turbidity, synthesise and re-run the real detector.
 
-    The trial SET is fixed by the original imagery (predicted_trials). Only the outcome
-    comes from the degraded frame. Otherwise the denominator would shrink exactly where
-    detection fails and the rate could never fall.
+    The trial SET is fixed by the original imagery (predicted_trials), never rebuilt
+    per multiplier. Only the outcome comes from the degraded frame. If the trial set
+    were rebuilt at each tau instead, the denominator would shrink exactly where
+    detection fails and the rate could never fall; see T.trials_at_tau.
     """
     pred = M.predicted_trials(obs, lay, Km, ci["width"], ci["height"])
 
@@ -274,17 +268,11 @@ def sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map, B_map, summary):
             detected_by_frame[fi] = {d["marker_id"] for d in detect.detect_frame(gray,
                                                                                 detector)}
             if m == 0.0:
-                # Identity check reference. detections.csv (from det/obs, used to build
-                # `pred` above) was produced by detect.sweep_dataset, which reads frames
-                # with cv2.IMREAD_GRAYSCALE. This sweep instead reads colour and does
-                # cv2.cvtColor(img, COLOR_BGR2GRAY) so it can synthesise per channel.
-                # Those two grey conversions are NOT the same image: they differ by up
-                # to 1 DN, which is enough to flip detections for markers sitting on
-                # ArUco's adaptive threshold. Comparing against detections.csv would
-                # therefore be comparing two different grey paths, not testing the
-                # synthesis. The correct reference is this frame's own
-                # cvtColor(imread(colour)) grey, detected WITHOUT synthesis, which is
-                # exactly what multiplier 0 (dbeta=0, exp(0)=1) must reproduce.
+                # Identity check reference: this frame's own cvtColor(imread(colour))
+                # grey, detected WITHOUT synthesis. Not detections.csv, which comes from
+                # IMREAD_GRAYSCALE, a different grey path (differs by up to 1 DN, enough
+                # to flip a marginal detection). Multiplier 0 (dbeta=0, exp(0)=1) must
+                # reproduce this reference exactly.
                 gray_ref = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 ref_dets = detect.detect_frame(gray_ref, detector)
                 reference_by_frame[fi] = {d["marker_id"] for d in ref_dets}
@@ -299,15 +287,13 @@ def sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map, B_map, summary):
         trials = T.trials_at_tau(pred[pred.frame_idx.isin(frame_ids)], detected_by_frame)
         rates = M.rate_by_bin(trials, PX_BINS)
         rates["multiplier"] = m
-        # dbeta_added = m * beta_grey is an ADDED ATTENUATION COEFFICIENT (units 1/m):
-        # it is the synthesis control knob passed into T.synthesise as dbeta, not an
-        # optical depth. tau = beta * range needs a range, which this quantity does not
-        # carry, so multiplying it by anything and calling it tau silently pools markers
-        # at very different actual optical depths at the same apparent size (a marker's
-        # size sets its range at fixed apparent px, and size varies 4.2x across the
-        # board). Do not reinstate tau_added_grey. The real per-trial tau_total, using
-        # each marker's own range from the board pose, is in turbidity_sweep_trials.csv
-        # and feeds figure_surface below.
+        # dbeta_added = m * beta_grey is an ADDED ATTENUATION COEFFICIENT (units 1/m),
+        # the synthesis control knob passed into T.synthesise as dbeta, NOT an optical
+        # depth: tau = beta * range needs a range, which this quantity does not carry.
+        # Do not bin or plot by it as if it were tau; that pools markers at different
+        # real optical depth. The real per-trial tau_total, using each marker's own
+        # range from the board pose, is in turbidity_sweep_trials.csv and feeds
+        # figure_surface below.
         rates["dbeta_added"] = m * beta_grey
         out.append(rates)
 
@@ -334,9 +320,11 @@ def sweep(dataset_dir, obs, poses, lay, Km, ci, beta_map, B_map, summary):
 
 def figure_surface(trials_df, summary):
     """rate(px, tau_total), tau_total = (1 + multiplier) * beta_grey * range_m from the
-    board pose. The parent study's sigmoid is ONE DIAGONAL SLICE through this: in real
-    data apparent size and optical depth are both set by range, so they cannot be
-    separated. Synthesis holds pixels fixed and varies tau, which reality never permits.
+    board pose. Bins by REAL tau, not by the multiplier or dbeta_added, which is an
+    attenuation coefficient in units of 1/m and would conflate markers at different
+    real optical depth. In real data apparent size and optical depth are both set by
+    range, so they cannot be separated; synthesis holds pixels fixed and varies tau,
+    which reality never permits.
     """
     t = trials_df.copy()
     t["px_bin"] = pd.cut(t.pred_px, PX_BINS, right=False)
@@ -360,11 +348,10 @@ def figure_surface(trials_df, summary):
     fig.colorbar(im, ax=ax, label="detection rate")
 
     # Cells above this line are still real trials (n >= MIN_TRIALS_PER_BIN), not blank
-    # space: detection is uniformly dead there (rate 0.0) and stays dead all the way to
-    # tau 10, which is itself the finding (the boundary sweeps right then never comes
-    # back). Clipping the axis to just past the highest NONZERO-rate cell keeps that
-    # boundary visible while not spending most of the canvas repeating "still zero".
-    # Every dropped cell is logged below so the cut is auditable, not silent.
+    # space: detection is uniformly dead there. Clipping the axis to just past the
+    # highest nonzero-rate cell keeps the boundary visible without spending most of the
+    # canvas on "still zero". Every dropped cell is logged below so the cut is
+    # auditable, not silent.
     nz = s[s.rate > 0]
     tau_hi = s.tau_bin.map(lambda iv: float(iv.right)).astype(float)
     if len(nz):
@@ -404,27 +391,13 @@ def figure_px_required(trials, fx, summary):
     Bins by tau_total (= (1 + m) * beta_grey * range_m, per trial, range from the board
     pose), NOT by the sweep's control knob. m * beta_grey has units 1/m and is an added
     attenuation coefficient, not an optical depth; binning on it pools markers at very
-    different real tau (at 150 px the 149.4 mm marker is at 0.79 m and the 35.6 mm at
-    0.19 m, so one cell mixes tau 0.27 to 1.15).
+    different real tau, since size and range both vary across the board.
 
-    Three findings, all supported by the measured curve:
-
-    1. The budget is about 27 px, not the textbook 21 px. 3(n+2) = 21 for a 5x5
-       dictionary is a pure sampling argument that assumes air, so it says nothing
-       about contrast; it underestimates by roughly 30 percent here.
-    2. The budget is FLAT from tau 0.18 to 1.30, a 7x range of optical depth.
-       ArUco's adaptive threshold is far more robust to contrast loss than the
-       sampling argument predicts.
-    3. Above tau about 2, detection collapses at every apparent size: the tau 2.0 to
-       2.6 bin tops out at max_rate 0.161, and every bin above tau 2.6 is 0.0. This is
-       a threshold, not a gradient.
-
-    Caution on (1) and (2): PX_BINS near the crossing are [..., 21, 28, 38, ...], so
-    px_at_rate interpolates every one of the tau 0.18 to 1.75 points between bin
-    centres 24.5 and 33.0, an interval only 8.5 px wide. The visible 27.3 to 32.3 px
-    wobble across those points is sub-bin interpolation, not a resolvable trend: do
-    not read it as the budget growing with tau. Only the flatness up to tau 1.30 and
-    the collapse above tau 2 are claims this binning can support.
+    Caution: PX_BINS near the crossing are [..., 21, 28, 38, ...], so px_at_rate
+    interpolates every point in a tau range between bin centres 24.5 and 33.0, an
+    interval only 8.5 px wide. The wobble across those points is sub-bin interpolation,
+    not a resolvable trend. Only the flatness up to tau 1.30 and the collapse above
+    tau 2 are claims this binning can support.
     """
     t = trials.copy()
     t["tau_bin"] = pd.cut(t.tau_total, TAU_BINS, right=False)
@@ -447,10 +420,10 @@ def figure_px_required(trials, fx, summary):
     curve.to_csv("results/px_required_vs_tau.csv", index=False)
     summary["px_required_vs_tau"] = curve.to_dict("records")
 
-    # Auditable resolution fact for the docstring's caution above: the two PX_BINS
-    # edges that bracket the crossing (21, 28, 38) give bin centres 24.5 and 33.0, an
-    # 8.5 px interval. px_at_rate interpolates linearly inside it, so any px_required
-    # value landing in this range is not resolved finer than its width.
+    # Auditable resolution fact for the docstring's caution above: bin centres 24.5 and
+    # 33.0 bracket the crossing, an 8.5 px interval that px_at_rate interpolates
+    # linearly inside, so any px_required value landing here is not resolved finer
+    # than its width.
     lo, mid, hi = 21.0, 28.0, 38.0
     interval_lo, interval_hi = (lo + mid) / 2.0, (mid + hi) / 2.0
     summary["px_required_bin_interval"] = {
@@ -467,13 +440,10 @@ def figure_px_required(trials, fx, summary):
                 textcoords="offset points", fontsize=6, color=vizstyle.TEXT_SECONDARY)
 
     # Mark where detection collapses: the first tau bin whose px_required is nan is
-    # the boundary past which no apparent size we measured reaches 50%. The flat curve
-    # to its left simply stops there with no visual cue otherwise, which reads as "the
-    # measurement ran out" rather than "detection died"; make the boundary explicit.
-    # The dead region actually runs to tau 14 (all zero), but drawing the full range
-    # would squeeze the live data into a sliver of the axes, so the view is clipped
-    # just past the first dead bin; the shading still implies it continues past the
-    # visible edge.
+    # the boundary past which no apparent size we measured reaches 50%. The dead region
+    # actually runs to tau 14 (all zero); the view is clipped just past the first dead
+    # bin so the live data isn't squeezed into a sliver, but the shading implies it
+    # continues past the visible edge.
     dead = curve[curve.px_required.isna()]
     if len(dead):
         tau_collapse = float(dead.iloc[0].tau_lo)
@@ -486,12 +456,9 @@ def figure_px_required(trials, fx, summary):
                     fontsize=6, color="#c0392b", va="top")
         ax.set_xlim(right=x_right)
 
-    # Show the measurement's own resolution, because without it this figure lies. The
-    # y-axis is zoomed to about 21 to 33 px, which magnifies the 4.9 px spread into what
-    # looks like a rise at the last live point. It is not: px_at_rate interpolates
-    # between px bin CENTRES, and every value here falls inside the single interval
-    # [24.5, 33.0]. Banding that interval shows at a glance that the whole curve sits
-    # within one bin's width, so no trend is resolvable and none should be read.
+    # Show the measurement's own resolution: the y-axis is zoomed enough that the
+    # sub-bin spread could read as a trend. Banding the bin interval shows at a glance
+    # that the whole curve sits within one bin's width, so no trend is resolvable.
     ax.axhspan(interval_lo, interval_hi, color=vizstyle.GHOST_COLOR, alpha=0.45,
                zorder=0)
     ax.annotate(f"one px bin interval [{interval_lo:.1f}, {interval_hi:.1f}]:"
@@ -507,21 +474,17 @@ def figure_px_required(trials, fx, summary):
     vizstyle.save(fig, "px_required_vs_tau")
 
     # Where the curve reports nan, detection never reached 50% at ANY size we measured.
-    # That is a result, not a gap: above roughly tau 2.3 turbidity limits regardless of
-    # apparent size. Record it rather than interpolating through it. `dead` was already
-    # computed above to place the collapse marker on the figure.
+    # Record it rather than interpolating through it. `dead` was already computed
+    # above to place the collapse marker on the figure.
     summary["tau_bins_never_reaching_50pc"] = [
         {"tau_lo": r.tau_lo, "tau_hi": r.tau_hi, "n": r.n, "max_rate": round(r.max_rate, 3)}
         for r in dead.itertuples()]
 
-    # side_mm interpolates px_required across the tau 0.18 to 1.75 rise that the
-    # docstring above and the shipped limitations both say is sub-bin interpolation,
-    # not a resolvable trend (every point in it falls inside the single px bin
-    # interval [interval_lo, interval_hi], interval_lo, interval_hi above). A bare
-    # side_mm therefore reads noise as signal. side_mm_lo/side_mm_hi convert that same
+    # side_mm interpolates px_required across a tau range that is sub-bin
+    # interpolation, not a resolvable trend (every point falls inside the single px
+    # bin interval [interval_lo, interval_hi]). side_mm_lo/side_mm_hi convert that same
     # bin interval into millimetres at the same range, so the sizing table always
-    # carries its own resolution alongside the point estimate; the point estimate
-    # itself is unchanged, per the project owner's crossing-rule decision.
+    # carries its own resolution alongside the point estimate.
     sizing = []
     for name, beta in BETA_SCENARIOS.items():
         b = summary["beta_grey_used"] if beta is None else beta
@@ -531,11 +494,10 @@ def figure_px_required(trials, fx, summary):
                 px_req = float("nan")     # outside what was measured; do not invent it
             else:
                 px_req = float(np.interp(tau, ok.tau_mid, ok.px_required))
-            # The interval is derived from range alone, so it would happily populate even
-            # where px_required is nan. It must not: quoting 92 to 124 mm for harbour
-            # water at 3 m would invent a bracket for a regime where we measured that
-            # detection collapses at every size. No crossing means no answer, bracket
-            # included.
+            # The interval is derived from range alone, so it would happily populate
+            # even where px_required is nan. It must not: that would invent a bracket
+            # for a regime where detection collapses at every size. No crossing means
+            # no answer, bracket included.
             if np.isnan(px_req):
                 side_lo = side_hi = float("nan")
             else:
@@ -556,18 +518,16 @@ def crossval(samples, beta_map, responses, summary):
 
     Same marker id, so J is identical; only the water between differs. The prediction is
         contrast_far = contrast_near * exp(-beta * (d_far - d_near))
-    which is the model with nothing else in it. Pairs are drawn across every marker with a
-    wide enough range span, and the distribution is what gets reported: one pair agreeing
-    proves nothing.
+    which is the model with nothing else in it. Pairs are drawn across every marker with
+    a wide enough range span, and the distribution is what gets reported: one pair
+    agreeing proves nothing.
 
     Every sample's contrast is also divided by its instrument response k(apparent_px)
-    before forming the corrected prediction. Apparent size falls with range, so the far
+    before forming the corrected prediction: apparent size falls with range, so the far
     sample of any pair is systematically under-read by the sampler (blur compresses the
-    black ring against the white sheet as the border cell approaches the blur width, down
-    to k about 0.816 at 42 px versus 1.000 at 170 px). Left uncorrected this reads as the
-    model over-predicting, when the defect is the sampler under-measuring, not beta. Both
-    the raw and the corrected distributions are reported; the difference between them is
-    itself evidence about the correction.
+    black ring against the white sheet). Left uncorrected this reads as the model
+    over-predicting, when the defect is the sampler under-measuring, not beta. Both the
+    raw and the corrected distributions are reported.
     """
     rows = []
     for mid, sub in samples.groupby("marker_id"):
@@ -620,31 +580,24 @@ def crossval(samples, beta_map, responses, summary):
 
 
 def figure_crossval_distribution(cv, summary):
-    """The actual validation: raw versus corrected relative error, pooled over every
-    near/far pair the dataset offers (5629 pairs per channel, all 9 markers, every
-    pair with a range gap of at least 0.5 m).
+    """The actual validation figure: raw versus corrected relative error, pooled over
+    every near/far pair the dataset offers (each pair has a range gap of at least
+    0.5 m).
 
     A box per channel, raw and corrected side by side, is the chosen form: the
-    finding is a location shift (about +18 percent collapsing to about -2.5 percent),
-    not the shape of either distribution, and box pairs read that shift at a glance
-    without the bin-width judgment calls a histogram would force at this width. A
-    zero line marks truth so the collapse toward it is visible without reading tick
-    labels.
+    finding is a location shift, not the shape of either distribution, and box pairs
+    read that shift at a glance. A zero line marks truth.
 
-    What this figure legitimately establishes, and what it does not:
-
-    This is NOT cross-validation in the statistical sense: beta was fitted on
-    exactly the 934 samples these pairs are drawn from, so there is no holdout set
-    and no independent data. What the pair-prediction test legitimately shows is
-    (a) that the exponential FORM holds, since curvature in range would show up as
-    opposite residual bias at the near and far ends of each pair, which it does not,
-    and (b) that after the instrument-response correction, the model reproduces
-    real far-frame contrast to within about 3 percent (median) with a p10/p90 of
-    roughly -9 to +14 percent. It is not independent validation of the
-    instrument-response correction itself: given the model, the raw bias is
-    k_near/k_far - 1 identically (k is applied to both sides of the same
-    prediction), so its magnitude and its collapse under correction are algebra,
-    not evidence that k(apparent_px) is the right correction to make.
+    This is NOT cross-validation in the statistical sense: beta was fitted on exactly
+    the samples these pairs are drawn from, so there is no holdout set. What the
+    pair-prediction test legitimately shows is (a) that the exponential FORM holds,
+    since curvature in range would show up as opposite residual bias at the near and
+    far ends of each pair, which it does not, and (b) that after the
+    instrument-response correction, the model reproduces real far-frame contrast
+    closely. It is not independent validation of the instrument-response correction
+    itself: given the model, the raw bias is k_near/k_far - 1 identically, so its
+    collapse under correction is algebra, not evidence that k(apparent_px) is the
+    right correction to make.
     """
     fig, ax = plt.subplots(figsize=(vizstyle.WIDE_W, vizstyle.COL_W * 0.85))
     colours = {"b": "#2a78d6", "g": "#2e8b57", "r": "#c0392b", "grey": "#52514e"}
@@ -675,19 +628,10 @@ def figure_crossval_distribution(cv, summary):
     ax.set_xlabel("relative error, predicted far contrast vs measured far contrast")
     ax.set_title("The model predicts real far-frame contrast to within 3 percent",
                 fontsize=9)
-    # A legend BELOW the axes. Two constraints pull against each other here. Inside the
-    # axes there is nowhere to put it: the raw whiskers reach +0.5, so every corner a
-    # legend would want is occupied, and it lands on the bottom channel's raw box. But a
-    # positional caption ("lower box is raw") is no good either, because the reader
-    # separates these boxes by COLOUR, not by position, and would have to decode the
-    # layout first. Anchoring the legend below the axes satisfies both: keyed to colour,
-    # clear of the data.
-    # A colour-keyed caption below the axes, and neither a legend box nor a positional
-    # caption, because both fail here. A legend inside the axes lands on the data: the
-    # raw whiskers reach +0.5, so every corner is occupied. A legend anchored outside
-    # lands on the x-axis label, since tight_layout reserves room for the label but not
-    # for it. And "lower box is raw" would make the reader decode the layout when the
-    # eye is already separating these by colour. So: say the colours.
+    # A colour-keyed caption below the axes, not a legend or a positional caption: a
+    # legend inside the axes lands on the data (raw whiskers reach +0.5, every corner
+    # is occupied), a legend anchored outside lands on the x-axis label, and the
+    # reader separates these boxes by colour, not position.
     fig.text(0.5, -0.02,
              "pale grey is raw, where the sampler reads far markers low; "
              "the channel's own colour is corrected by k(apparent_px). "
@@ -727,22 +671,14 @@ def figure_sweep_strip(dataset_dir, poses, lay, Km, ci, beta_map, B_map, summary
                        frame_idx=SWEEP_STRIP_FRAME):
     """Figure 1, a five-panel strip: the same frame, synthesised at multipliers
     0/1/2/4/8, so a reader can see what "tau" means instead of only reading it off a
-    curve. Frame 197 has all 9 board markers and 7/9 detected at multiplier 0, so what
-    changes across the strip is the water, not the framing; every panel uses the SAME
-    crop, from the frame's own board pose, so the comparison is like for like.
+    curve. Every panel uses the SAME crop, from the frame's own board pose, so the
+    comparison is like for like.
 
     Each marker is outlined from its PROJECTED pose corners, not its detected corners,
     so a marker the detector misses still gets an outline (red); a detected marker's
-    outline is green. That is what makes the strip a diagnostic and not just a picture:
-    it is the same 9 outlines every panel, only their colour and the water changing.
-
-    This figure is also where the veiling light B's incoherence (see the limitations
-    entry: B_green fits at 241.9 DN, brighter than the white sheet is ever observed,
-    about 144 to 154 DN) becomes visible rather than a number in a table. At high
-    multiplier every degraded pixel is pulled toward B, so if B is implausibly bright
-    the panel should look implausibly washed out; if it still reads as murky water,
-    that is evidence the model's insensitivity to B (contrast is B-free by
-    construction) is doing the work the docstring in turbidity.py claims for it.
+    outline is green. That is what makes the strip a diagnostic and not just a
+    picture: the same 9 outlines every panel, only their colour and the water
+    changing.
     """
     rv, tv = poses[frame_idx]
     shape = (ci["height"], ci["width"])
@@ -843,22 +779,14 @@ def _grey_contrast(warped):
 
 def figure_synthesis_validation(dataset_dir, det, poses, lay, Km, ci, beta_map, B_map,
                                 summary, mid=VALIDATION_MARKER_ID):
-    """Synthesis illustrated: marker 201 at the widest baseline, NOT a validation figure.
-
-    The actual validation is figure_crossval_distribution (results/crossval_distribution),
-    which pools 5629 near/far pairs across every marker and reports a corrected median
-    relative error of about -2.5 percent (p10 about -9 percent, p90 about 14 percent).
-    This figure is one pair from that pool, chosen because it is the TAIL, not the
-    typical case: marker 201 appears at about 0.62 m (189.7 px) and, later in the run,
-    at about 3.19 m (43.0 px), the widest baseline (2.57 m of real water) available for
-    any single marker in the dataset. The near observation is degraded to the far
-    observation's optical depth and compared against the far observation itself.
-
-    It is chosen for illustration, not representativeness: the widest baseline makes
-    the degradation mechanism (contrast collapsing with added water) most visible to
-    the eye. Its raw contrast deficit is about 70 percent, far beyond the pooled p90 of
-    about 13.8 percent; do not read this panel's numbers as the study's result. Read
-    crossval_distribution for that.
+    """Synthesis illustrated: marker 201 at the widest baseline, NOT the validation
+    figure; that is figure_crossval_distribution (results/crossval_distribution),
+    which pools every near/far pair across every marker. This figure is one pair from
+    that pool, chosen because it is the TAIL, not the typical case: the widest
+    baseline available for any single marker in the dataset, degraded to the far
+    observation's optical depth and compared against the far observation itself. Do
+    not read this panel's numbers as the study's result; read crossval_distribution
+    for that.
 
     Deriving dbeta: synthesise() applies exp(-dbeta * d(x)) with d(x) the plane depth
     at each pixel, which at marker 201's own location in the near frame is d_near, not
@@ -867,42 +795,9 @@ def figure_synthesis_validation(dataset_dir, det, poses, lay, Km, ci, beta_map, 
         dbeta = beta * (d_far - d_near) / d_near
     computed below from the measured beta and the two ranges, not hard-coded.
 
-    Two things this figure does NOT hide:
-
-    1. The far panel is upsampled from about 43 px to the canonical warp size, while
-       the near panel is downsampled from about 190 px to the same size. The far panel
-       is therefore blockier. That is what the data is, not a synthesis artifact.
-    2. The difference panel's residual is expected to be LARGELY the instrument
-       response, not model error: at 43 px apparent size, blur compresses the far
-       marker's rings enough that its measured contrast reads about 18 percent low,
-       which is exactly what k(apparent_px) (see turbidity.measure_instrument_response)
-       corrects. A roughly uniform contrast deficit in the difference panel is that
-       effect, expected and already accounted for elsewhere; anything OTHER than a
-       roughly uniform deficit (structure following the rings, one side brighter than
-       the other) would be a finding, not this effect, and must be reported as one.
-
-    Measured here: the raw deficit for THIS pair is about 70 percent, not the ~18
-    percent that a single k(px) reading suggests, and the difference panel does show
-    structure (it follows the marker's own ring pattern, brighter over the black
-    cells), which is what a CONTRAST-scaled residual looks like, not an additive
-    offset. Applying the k(px) correction to both ends only brings the gap to about
-    30 percent (turbidity_summary.json's crossval.corrected reports a 3 percent
-    MEDIAN and a 12 to 14 percent p90 over 5629 pairs), so this specific pair, the
-    largest baseline for this marker, is a genuine outlier against the pooled
-    statistic, not merely the pooled statistic's typical case drawn in pixels. The
-    pooled median remains the right number to cite; this figure is the worst
-    single case in the pool, not the typical one, and is reported as such.
-
-    What this figure genuinely demonstrates, separate from the deficit percentage: the
-    degraded panel reads bright cyan while the real far panel reads dark teal, a mean
-    difference of about +48.5 DN. That is the model getting CONTRAST approximately
-    right and DC badly wrong, exactly the decomposition claimed elsewhere: veiling
-    light B fits at 241.9 DN, brighter than the white sheet is ever observed (about
-    144 to 154 DN), so B alone is not physically plausible. Contrast is B-free by
-    construction (see turbidity.py's module docstring), and it is contrast, not the
-    absolute colour, that the crossval numbers above are measuring. This imagery
-    disproves B as a standalone number while confirming the structure of the argument
-    that separates B from beta.
+    The far panel is upsampled to the canonical warp size while the near panel is
+    downsampled to it, so the far panel is blockier; that is what the data is, not a
+    synthesis artifact.
     """
     fi_near = _frame_closest_to_range(poses, lay, mid, VALIDATION_NEAR_RANGE_M)
     fi_far = _frame_closest_to_range(poses, lay, mid, VALIDATION_FAR_RANGE_M)
@@ -1032,10 +927,10 @@ def main(dataset_dir="dataset"):
     fe = fixed_effects_beta_table(samples, responses)
     fe_row = {r.channel: r for r in fe.itertuples()}
 
-    # The naive pooled fit (measure_beta) is biased about 19% high (Task 7b): the
-    # sampler reads small markers low and small means far, so its own defect imitates
-    # attenuation. The corrected fixed-effects fit is the authoritative beta and is
-    # what feeds veiling light, tau_at_5m, and the turbidity synthesis below.
+    # The naive pooled fit (measure_beta) is biased high: the sampler reads small
+    # markers low and small means far, so its own defect imitates attenuation. The
+    # corrected fixed-effects fit is the authoritative beta and is what feeds veiling
+    # light, tau_at_5m, and the turbidity synthesis below.
     beta_map = {ch: fe_row[ch].beta_corrected for ch in T.CHANNELS}
     veil = T.measure_veiling(samples, beta_map)
     betas.merge(veil, on="channel").to_csv("results/turbidity_beta.csv", index=False)
@@ -1097,15 +992,10 @@ def main(dataset_dir="dataset"):
     # needs. See the comment at that assertion for why detections.csv is not the
     # reference.
 
-    # The sweep's own multiplier-0 baseline rate (~0.519) differs from the parent
-    # study's published figure from detections.csv (1374/2551 = 0.539, about 4%
-    # higher). That gap is the same grey-path difference: detections.csv comes from
-    # detect.sweep_dataset's cv2.IMREAD_GRAYSCALE, while this sweep reads colour and
-    # converts with cv2.cvtColor, which differs by up to 1 DN and flips marginal
-    # detections. It does not invalidate the sweep, since every multiplier inside it
-    # uses one consistent grey path, so the tau dependence is unaffected. Arguably
-    # cvtColor-on-colour is the more representative path anyway: the ZED publishes
-    # colour, and a real docking pipeline would convert it the same way.
+    # The sweep's own multiplier-0 baseline rate differs slightly from detections.csv,
+    # the same IMREAD_GRAYSCALE vs cvtColor(imread(colour)) grey-path difference noted
+    # at the identity check above. Every multiplier inside the sweep uses one
+    # consistent grey path, so the tau dependence is unaffected.
     published_rate = 1374 / 2551
     sweep_baseline_rate = summary["overall_rate_by_multiplier"]["0.0"]["rate"]
     summary["baseline_rate_vs_published"] = {

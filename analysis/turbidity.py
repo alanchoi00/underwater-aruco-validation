@@ -1,7 +1,7 @@
 """Turbidity: measure the water's attenuation, then synthesise more of it.
 
-The board is already the experiment. A black patch and a white patch at the same range
-share an identical veiling term in the image formation model
+A black patch and a white patch at the same range share an identical veiling term in
+the image formation model
 
     I = J * exp(-beta * d) + B * (1 - exp(-beta * d))
 
@@ -10,8 +10,6 @@ so their difference is B-free:
     contrast(d) = (J_white - J_black) * exp(-beta * d)
 
 Taking logs makes beta a straight-line fit that needs no assumption about backscatter.
-That matters, because B itself fits badly (r^2 negative, between -0.57 and -2.72 across
-channels) while beta fits well (r^2 0.705/0.672/0.877/0.746 for b/g/r/grey).
 """
 import cv2
 import numpy as np
@@ -116,10 +114,8 @@ def fit_beta(d, contrast):
 def fit_veiling(d, black, beta):
     """Fit I_black(d) = B * (1 - exp(-beta * d)) for B, with beta already known.
 
-    Linear in B through the origin, so B is a ratio of sums. Reported with its r2 because
-    that r2 is the point: it is negative on real data (the driver reports B r2 between
-    -0.57 and -2.72 across channels), and the design depends on nobody trusting B
-    further than that.
+    Linear in B through the origin, so B is a ratio of sums. r2 is reported since it can
+    be badly negative on real data; do not trust B beyond what that r2 says.
     """
     d = np.asarray(d, dtype=float)
     y = np.asarray(black, dtype=float)
@@ -134,12 +130,11 @@ def fit_veiling(d, black, beta):
 def measure_instrument_response(samples, channel, band=(0.62, 0.88)):
     """Measure the instrument's response k(apparent_px) in a fixed range band.
 
-    In `band` every marker sees the same water, so at fixed range contrast MUST be
+    In `band` every marker sees the same water, so at fixed range contrast is
     independent of apparent size; any dependence found here is the instrument's own
     response (blur compressing a small marker's black ring and white sheet together),
-    not beta. Grouping is by marker id, so this is calibrated at fixed range and never
-    sees beta, which is what makes it a correction rather than a fit against the thing
-    it corrects.
+    not beta. Grouping by marker id keeps this calibrated at fixed range only, so it
+    is a correction, not a fit against the thing it corrects.
 
     Returns (k_px, k_val), sorted by apparent px ascending, with k_val normalised so
     the group with the largest median apparent_px reads 1.0.
@@ -163,10 +158,8 @@ def apply_instrument_response(apparent_px, k_px, k_val):
     """Interpolate the instrument response k(apparent_px) at arbitrary apparent sizes.
 
     Uses np.interp, which clamps outside the calibrated range (returns k_val at the
-    nearest end of k_px for anything smaller or larger). That clamping is correct
-    here: the response was only ever measured across the apparent sizes seen in the
-    calibration band, and holding it flat beyond that range is the conservative
-    choice rather than extrapolating into unmeasured behaviour.
+    nearest end of k_px). Holding it flat beyond the calibrated range is deliberate:
+    the conservative choice over extrapolating into unmeasured behaviour.
     """
     return np.interp(np.asarray(apparent_px, dtype=float), k_px, k_val)
 
@@ -180,13 +173,12 @@ def fit_beta_fixed_effects(samples, channel, k=None):
     pooled intercept.
 
     If k is given as (k_px, k_val), every sample's contrast is first divided by its
-    interpolated instrument response before the fit, correcting the range-correlated
-    bias that k(px) measures. Non-positive contrast (after correction) is dropped
-    before the log, same as fit_beta.
+    interpolated instrument response before the fit. Non-positive contrast (after
+    correction) is dropped before the log, same as fit_beta.
 
     Returns (beta, r2, intercepts_by_id) where intercepts_by_id maps marker id to
-    exp(a_i), i.e. the corrected C0 in contrast units, and r2 is reported in log
-    space over the samples that survived the drop.
+    exp(a_i), the corrected C0 in contrast units, and r2 is reported in log space
+    over the samples that survived the drop.
     """
     sub = samples.dropna(subset=[f"white_{channel}", f"black_{channel}",
                                  "range_m", "marker_id"])
@@ -228,10 +220,9 @@ def measure_beta(samples):
     """Per-channel beta from the black/white contrast decay across the sample set.
 
     Superseded by fit_beta_fixed_effects with the instrument-response correction,
-    which is the authoritative beta (about 19% lower; this pooled fit conflates each
-    marker's own intercept with the shared slope). Retained only so
-    turbidity_beta.csv keeps its original column for continuity with the earlier
-    stage; do not read its output as the beta.
+    which is the authoritative beta: this pooled fit conflates each marker's own
+    intercept with the shared slope and is biased high. Do not read its output as
+    the beta.
     """
     rows = []
     for ch in CHANNELS:
@@ -259,9 +250,6 @@ def plane_depth_map(layout, rv, tv, K, shape):
     The board is z = 0 in board coords, so the plane in camera coords has normal
     R @ [0,0,1] and passes through tv. Each pixel's ray is s * Kinv @ [u,v,1]; solving
     n . (s*ray - tv) = 0 gives s, and the range is the length of that ray.
-
-    This is geometric truth, not a monocular depth estimate, which is the main thing this
-    synthesis has that the published ones do not.
     """
     h, w = shape[:2]
     R = g.rodrigues(np.asarray(rv, dtype=float)[None])[0]
@@ -284,9 +272,8 @@ def board_mask(layout, rv, tv, K, shape, margin_m=0.04):
     """Pixels covered by the physical board, as the marker bounding box plus a margin.
 
     The margin exists because ArUco thresholds each pixel against its neighbours, so a
-    marker's white sheet is part of what makes it detectable and must be degraded with it.
-    The background beyond the board is left alone and is therefore physically incoherent;
-    it does not reach the detector's decision, but the driver reports the caveat.
+    marker's white sheet is part of what makes it detectable and must be degraded with
+    it. The background beyond the board is left undegraded.
     """
     h, w = shape[:2]
     xy = np.concatenate([g.board_pts(layout, np.array([g.IDX[m]]))[0] for m in g.IDS])
@@ -310,22 +297,21 @@ def synthesise(img, depth, mask, B, dbeta):
 
         I_new = B + (I_obs - B) * exp(-dbeta * d(x))
 
-    This is the simplified image formation model with J eliminated. It is algebraically
-    identical to recovering J = (I - B*(1-T))/T with T = exp(-beta*d) and then
-    re-attenuating with beta+dbeta, but it never forms J explicitly.
+    This is the simplified image formation model with J eliminated: it is
+    algebraically identical to recovering J = (I - B*(1-T))/T with T = exp(-beta*d)
+    and re-attenuating with beta+dbeta, but never forms J explicitly. That matters
+    because the recovered J is not representable on real pixel values (it runs
+    hundreds of DN outside 0..255) and would have to be clipped, destroying the
+    signal. This form's output always lies between I_obs and B, so it cannot leave
+    range, and it never needs beta itself, only the dbeta being added.
 
-    That matters because the recovered J is not representable: at beta = 0.53 (red) and
-    d = 3 m, exp(-beta*d) = 0.204, and J on real pixel values ranges roughly -600 to
-    +520. Any pipeline that stores that intermediate as an image clips it and destroys
-    the signal. This form's output always lies between I_obs and B, so it cannot leave
-    range. It also never needs beta itself, only the dbeta being added.
+    B cancels exactly from the difference of any two pixels at the same range, so
+    contrast scales by exactly exp(-dbeta*d) regardless of how well B itself is
+    known; B only sets the DC level, which ArUco's adaptive threshold largely
+    rejects.
 
-    B's poor fit (r^2 negative, between -0.57 and -2.72 across channels) does not sink
-    the method: B cancels exactly from the difference of any two pixels at the same
-    range, so contrast scales by exactly exp(-dbeta*d) and B only sets the DC level,
-    which ArUco's adaptive threshold largely rejects. That is a property of the model
-    itself, not an advantage of this formulation over recovering J and re-attenuating;
-    the two are the same function.
+    Always synthesise in colour and convert to grey afterward; converting to grey
+    first and synthesising on that loses the per-channel beta this model needs.
 
     Pixels outside mask, or whose depth is nan, are returned untouched.
     """
@@ -346,10 +332,9 @@ def _profile(gray, p, direction, reach_out, reach_in, step=0.25):
     """Bilinear intensity samples along a ray, from -reach_in to +reach_out about p.
 
     `direction` must be the outward normal, so negative t moves inward (into the
-    marker) and positive t moves outward (into the surrounding sheet). The two reaches
-    differ on purpose: outward runs into clean white sheet and can go far, inward must
-    stay inside the marker's one-cell-wide black border, or the profile picks up the
-    data area behind it (see edge_width).
+    marker) and positive t moves outward (into the surrounding sheet). The reaches
+    differ because inward must stay inside the marker's one-cell-wide black border,
+    or the profile picks up the data area behind it (see edge_width).
     """
     ts = np.arange(-reach_in, reach_out + step, step)
     pts = p[None, :] + ts[:, None] * direction[None, :]
@@ -373,9 +358,8 @@ def _rise_10_90(ts, vals, reversal_tol=0.15):
     variation (sum of |diffs|) to net variation (|end - start|) of the normalised
     profile: a clean step has TV approx equal to its net rise, while a hump adds a
     second excursion that inflates TV well beyond the net change. reversal_tol=0.15
-    allows 15% of extra TV for sampling noise and anti-aliasing, which is generous
-    against real single-step profiles but far below the roughly 2x TV a genuine
-    double edge produces.
+    allows some extra TV for sampling noise and anti-aliasing while still well below
+    the TV a genuine double edge produces.
     """
     lo, hi = float(np.min(vals)), float(np.max(vals))
     if hi - lo < 20.0:
@@ -410,22 +394,20 @@ def _crossing(ts, norm, level):
 def edge_width(gray, corners, n_samples=16, reach_px=8.0):
     """Median 10-90% rise distance, in pixels, across the marker's outer boundary.
 
-    Measured in the ORIGINAL frame: the canonical warp resamples, and would report its own
-    interpolation kernel as if it were the water. Samples several points along each of the
-    four edges, crossing outward along the edge normal, and takes the median so a single
-    occluded or clipped sample cannot set the answer.
+    Measured in the ORIGINAL frame: the canonical warp resamples, and would report its
+    own interpolation kernel as if it were the water. Samples several points along each
+    of the four edges, crossing outward along the edge normal, and takes the median so
+    a single occluded or clipped sample cannot set the answer.
 
-    The marker's black border is one cell wide (a 7x7 grid), so a symmetric reach_px
-    on both sides of the boundary contaminates small markers: at 40 px apparent size a
-    cell is 5.71 px, and an 8 px inward reach lands 1.4 cells in, past the border and
-    into the data area, producing a spurious white-black-white profile instead of a
-    single step. The outward direction has no such limit, since it runs into clean
-    white sheet. So the reach is asymmetric: outward stays at reach_px, inward is
-    capped at 0.45 of the marker's own cell size, computed from its own corners, to
-    stay well inside the border cell. That reduces contamination but the border is
-    anti-aliased and the physical board is printed at 95.9% of nominal scale, so a
-    residual hump can still reach a sample; _rise_10_90 detects and rejects it
-    directly rather than trusting the reach bound alone.
+    The marker's black border is one cell wide (a 7x7 grid), so a symmetric reach_px on
+    both sides of the boundary contaminates small markers: the inward reach can land
+    past the border into the data area, producing a spurious white-black-white profile
+    instead of a single step. The outward direction has no such limit, since it runs
+    into clean white sheet. So the reach is asymmetric: outward stays at reach_px,
+    inward is capped at 0.45 of the marker's own cell size, computed from its own
+    corners, to stay well inside the border cell. That reduces contamination but does
+    not guarantee it (anti-aliasing and print scale can still let a residual hump reach
+    a sample), so _rise_10_90 also detects and rejects non-monotone profiles directly.
     """
     c = np.asarray(corners, dtype=float)
     centre = c.mean(axis=0)
@@ -456,9 +438,11 @@ def edge_width(gray, corners, n_samples=16, reach_px=8.0):
 def trials_at_tau(pred, detected_by_frame):
     """Re-score a FIXED trial set against a degraded frame's detections.
 
-    detected_by_frame maps frame_idx -> set of detected marker ids. The trial set comes
-    from the original imagery and never moves, so the denominator is the same at every
-    optical depth and the rates across the sweep are directly comparable.
+    detected_by_frame maps frame_idx -> set of detected marker ids. The trial set
+    (`pred`, i.e. predicted_trials) must come from the ORIGINAL imagery and never move;
+    only the outcome comes from the degraded frames. If the trial set were rebuilt per
+    tau instead, the denominator would shrink exactly where detection fails, and the
+    rate could never fall.
     """
     out = pred.copy()
     out["detected"] = [int(mid in detected_by_frame.get(int(fi), ()))
